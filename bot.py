@@ -166,11 +166,19 @@ def wallet_menu(balance_str: str) -> InlineKeyboardMarkup:
 
 
 def amount_menu() -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(
-        f"{config.CURRENCY_SYMBOL}{a}", callback_data=f"topup_amt:{a}")]
-        for a in config.TOPUP_PRESETS]
-    rows.append([InlineKeyboardButton("\u270F\uFE0F Custom amount", callback_data="topup_custom")])
-    rows.append([InlineKeyboardButton("\u2B05\uFE0F Back", callback_data="wallet")])
+    presets = config.TOPUP_PRESETS
+    rows = []
+    for i in range(0, len(presets), 2):
+        pair = presets[i:i + 2]
+        rows.append([
+            InlineKeyboardButton(
+                f"\U0001F538 {config.CURRENCY_SYMBOL}{a}",
+                callback_data=f"topup_amt:{a}",
+            )
+            for a in pair
+        ])
+    rows.append([InlineKeyboardButton("\U0001F4B0 Custom Amount", callback_data="topup_custom")])
+    rows.append([InlineKeyboardButton("\U0001F30F Main Menu",      callback_data="menu")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -245,16 +253,24 @@ async def handle_topup_amount(update, context) -> None:
     try:
         amount = float(raw)
     except ValueError:
-        await update.message.reply_text("Please send just a number, e.g. 15")
+        await update.message.reply_text("Please send just a number, e.g. 50")
         return
-    if amount < 1 or amount > 100000:
-        await update.message.reply_text("Enter an amount between 1 and 100000.")
+    if amount < config.TOPUP_MIN:
+        await update.message.reply_text(
+            f"⚠️ Minimum top-up is {config.CURRENCY_SYMBOL}{config.TOPUP_MIN}. "
+            "Please enter a higher amount."
+        )
+        return
+    if amount > 100000:
+        await update.message.reply_text("Please enter an amount under 100,000.")
         return
     context.user_data["awaiting"]     = None
     context.user_data["topup_amount"] = amount
     await update.message.reply_text(
-        f"Amount: {config.CURRENCY_SYMBOL}{amount:.2f}\nChoose which coin to pay with:",
+        f"Amount: <b>{config.CURRENCY_SYMBOL}{amount:.2f}</b>\n"
+        "Choose which coin you will pay with:",
         reply_markup=coin_menu(),
+        parse_mode="HTML",
     )
 
 
@@ -276,8 +292,16 @@ async def handle_bin_search(update, context) -> None:
 
     if not matches:
         await update.message.reply_text(
-            f"\U0001F50D No stock matching BIN <code>{bin_digits}</code> right now.",
-            reply_markup=sublist_back_menu(cat_id),
+            f"❌ <b>No Stock Found</b>\n\n"
+            f"BIN <code>{bin_digits}</code> is not available in any list right now.\n\n"
+            "Try a different BIN or check back later.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("\U0001F504 Search Another BIN",
+                                      callback_data=f"binsearch:{cat_id}")],
+                [InlineKeyboardButton("\u2B05\uFE0F Back",
+                                      callback_data=f"cat:{cat_id}")],
+                [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
+            ]),
             parse_mode="HTML",
         )
         return
@@ -354,30 +378,114 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif data.startswith("line:"):
         _, subl_id, line_id = data.split(":", 2)
         item = await db.get_stock_item(line_id)
-        if not item or item.get("sold"):
-            await safe_edit(query, "This item is no longer available.", store_menu())
-            return
         parent_cat = next(
             (c for c in config.CATEGORIES
              if any(s["id"] == subl_id for s in c.get("sublists", []))),
             None,
         )
-        cat_id    = parent_cat["id"] if parent_cat else "ff"
+        cat_id = parent_cat["id"] if parent_cat else "ff"
+
+        if not item or item.get("sold"):
+            await safe_edit(
+                query,
+                "❌ <b>No Longer Available</b>\n\n"
+                "This item has already been sold.\n"
+                "Tap below to go back and browse other listings.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\u2B05\uFE0F Back to List",
+                                         callback_data=f"subl:{cat_id}:{subl_id}")],
+                    [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
+                ]),
+            )
+            return
+
+        bal       = await db.get_balance(uid)
         price_str = f"{float(item['price']):g}"
+        can_buy   = bal >= item["price"]
+        shortfall = item["price"] - bal
+
+        buy_row = (
+            [InlineKeyboardButton(
+                f"\U0001F6D2 Buy — {config.CURRENCY_SYMBOL}{price_str}",
+                callback_data=f"buy:{subl_id}:{line_id}",
+            )]
+            if can_buy else
+            [InlineKeyboardButton(
+                f"\U0001F4B3 Top Up {config.CURRENCY_SYMBOL}{float(shortfall):g} to Buy",
+                callback_data="topup",
+            )]
+        )
         await safe_edit(
             query,
             f"<b>{format_line(item)}</b>\n\n"
-            f"BIN: <code>{item['bin']}</code>\n"
-            f"Year: {item['year']}\n"
-            f"Code/Region: {item['code']}\n"
-            f"Price: {config.CURRENCY_SYMBOL}{price_str}\n\n"
-            "Purchasing isn\u2019t wired up yet \u2014 that comes next.",
+            f"BIN:          <code>{item['bin']}</code>\n"
+            f"Year:         {item['year']}\n"
+            f"Code/Region:  {item['code']}\n"
+            f"Price:        <b>{config.CURRENCY_SYMBOL}{price_str}</b>\n"
+            f"Your balance: {config.CURRENCY_SYMBOL}{bal:.2f}\n\n"
+            + ("✅ You have enough balance to buy." if can_buy else
+               f"⚠️ You need <b>{config.CURRENCY_SYMBOL}{float(shortfall):g}</b> more. Tap to top up."),
             InlineKeyboardMarkup([
-                [InlineKeyboardButton(
-                    "\u2B05\uFE0F Back", callback_data=f"subl:{cat_id}:{subl_id}")],
+                buy_row,
+                [InlineKeyboardButton("\u2B05\uFE0F Back",
+                                      callback_data=f"subl:{cat_id}:{subl_id}")],
                 [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
             ]),
         )
+
+    elif data.startswith("buy:"):
+        _, subl_id, line_id = data.split(":", 2)
+        result = await db.purchase_item(uid, line_id)
+
+        if result["status"] == "not_available":
+            parent_cat = next(
+                (c for c in config.CATEGORIES
+                 if any(s["id"] == subl_id for s in c.get("sublists", []))),
+                None,
+            )
+            cat_id = parent_cat["id"] if parent_cat else "ff"
+            await safe_edit(
+                query,
+                "❌ <b>No Longer Available</b>\n\n"
+                "This item was just purchased by someone else.\n"
+                "Tap below to browse other listings.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\u2B05\uFE0F Back to List",
+                                         callback_data=f"subl:ff:{subl_id}")],
+                    [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
+                ]),
+            )
+
+        elif result["status"] == "insufficient":
+            shortfall = result["shortfall"]
+            await safe_edit(
+                query,
+                f"⚠️ <b>Insufficient Balance</b>\n\n"
+                f"You need <b>{config.CURRENCY_SYMBOL}{float(shortfall):g}</b> more.\n\n"
+                "Top up your wallet and come back.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\u2795 Top Up Now", callback_data="topup")],
+                    [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
+                ]),
+            )
+
+        else:  # success
+            new_bal = result["new_balance"]
+            content = result["content"]
+            await safe_edit(
+                query,
+                f"✅ <b>Purchase Successful!</b>\n\n"
+                f"Paid: <b>{config.CURRENCY_SYMBOL}{float(result['price']):g}</b>\n"
+                f"New balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}\n\n"
+                "─────────────────\n"
+                f"<code>{content}</code>\n"
+                "─────────────────\n\n"
+                "Screenshot this or copy it now.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\U0001F6D2 Back to Store", callback_data="store")],
+                    [InlineKeyboardButton("\U0001F30F Main Menu",     callback_data="menu")],
+                ]),
+            )
 
     elif data.startswith("binsearch:"):
         cat_id = data.split(":", 1)[1]
@@ -413,7 +521,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data["awaiting"] = "topup_amount"
         await safe_edit(
             query,
-            "\u270F\uFE0F Type the amount you want to add (e.g. 15), then send it.",
+            f"\U0001F4B0 <b>Custom Amount</b>\n\n"
+            f"Minimum top-up is <b>{config.CURRENCY_SYMBOL}{config.TOPUP_MIN}</b>.\n\n"
+            "Type the amount you want to add and send it:",
             InlineKeyboardMarkup([[
                 InlineKeyboardButton("\u2B05\uFE0F Back", callback_data="topup")
             ]]),
@@ -469,15 +579,22 @@ async def show_payment_address(query, context, user_id, amount, coin) -> None:
     await db.record_payment(payment_id, user_id, Decimal(str(amount)), coin)
     context.user_data["topup_amount"]  = None  # clear so it can't be reused
 
+    # Fetch live exchange rate
+    rates    = await payments.get_rates_gbp()
+    rate     = rates.get(coin, 0)
+    rate_str = payments.format_crypto_amount(amount, rate, coin) if rate else ""
+    crypto_line = f"\nSend approx:  <b>{rate_str}</b>" if rate_str else \
+                  "\n<i>(Check the current rate before sending)</i>"
+
     await safe_edit(
         query,
         f"\U0001F4B3 <b>Top-Up Instructions</b>\n\n"
-        f"Amount: <b>{config.CURRENCY_SYMBOL}{amount:g}</b>\n"
-        f"Coin:   <b>{coin}</b>\n\n"
-        f"Send the equivalent amount in <b>{coin}</b> to:\n"
+        f"Amount:  <b>{config.CURRENCY_SYMBOL}{amount:g}</b>{crypto_line}\n"
+        f"Coin:    <b>{coin}</b>\n\n"
+        f"Send to this address:\n"
         f"<code>{address}</code>\n\n"
         f"{config.PAYMENT_NOTE}\n\n"
-        "Once you have sent, tap the button below.",
+        "Once sent, tap the button below.",
         sent_menu(payment_id),
     )
 
