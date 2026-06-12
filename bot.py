@@ -27,7 +27,10 @@ from telegram.ext import (
 )
 
 import admin
-import channel_log
+try:
+    import channel_log
+except ImportError:
+    channel_log = None  # log channel not set up yet — safe to continue
 import config
 import db
 import payments
@@ -50,7 +53,6 @@ def Welcome_text() -> str:
         "Managed by @EXCELV1\n"
         "Coded by @EXCELV1 on session 05a5c62989edb4dadf7cb1274e35e37d498b5af459b04e08fe08ab037a206ec841"
     )
-
 
 
 def _tg_url(https_url: str) -> str:
@@ -237,7 +239,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     existing = await db.get_user_info(uid)
     is_new   = existing is None
     await db.ensure_user(uid, username)
-    await channel_log.user_start(uid, username, is_new)
+    channel_log and await channel_log.user_start(uid, username, is_new)
     if await db.is_banned(uid):
         await update.message.reply_text(
             "\U0001F6AB You have been banned from this store.\n"
@@ -398,7 +400,7 @@ async def handle_bin_search(update, context) -> None:
             if it["bin"] == bin_digits:
                 matches.append((subl["id"], it))
 
-    await channel_log.bin_search(update.effective_user.id, bin_digits, len(matches))
+    channel_log and await channel_log.bin_search(update.effective_user.id, bin_digits, len(matches))
 
     if not matches:
         await update.message.reply_text(
@@ -438,15 +440,15 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid   = query.from_user.id
 
     if data == "menu":
-        await channel_log.nav_event(uid, "Main Menu")
+        channel_log and await channel_log.nav_event(uid, "Main Menu")
         await safe_edit(query, welcome_text(), main_menu())
 
     elif data == "rules":
-        await channel_log.nav_event(uid, "Rules")
+        channel_log and await channel_log.nav_event(uid, "Rules")
         await safe_edit(query, config.RULES_TEXT, back_menu())
 
     elif data == "store":
-        await channel_log.nav_event(uid, "Store")
+        channel_log and await channel_log.nav_event(uid, "Store")
         await safe_edit(query, "\U0001F6D2 <b>Store</b>\n\nChoose a category:", store_menu())
 
     elif data.startswith("cat:"):
@@ -455,7 +457,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not cat:
             await safe_edit(query, "Category not found.", store_menu())
             return
-        await channel_log.nav_event(uid, "Category", db.get_label(f"cat:{cat_id}", cat["label"] if cat else cat_id))
+        channel_log and await channel_log.nav_event(uid, "Category", db.get_label(f"cat:{cat_id}", cat["label"] if cat else cat_id))
         if not cat.get("sublists"):
             await safe_edit(query, f"{cat['label']}\n\nNo lists yet.",
                             sublist_back_menu(cat_id))
@@ -470,7 +472,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await safe_edit(query, "List not found.", store_menu())
             return
         subl_label = db.get_label(f"subl:{subl_id}", subl["label"])
-        await channel_log.nav_event(uid, "Sublist", subl_label)
+        channel_log and await channel_log.nav_event(uid, "Sublist", subl_label)
         items = await db.get_stock(subl_id)
         if not items:
             await safe_edit(query, f"{subl['label']}\n\nNo lines in stock right now.",
@@ -531,7 +533,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 callback_data="topup",
             )]
         )
-        await channel_log.item_viewed(
+        channel_log and await channel_log.item_viewed(
             uid, item["bin"], item["year"], item["code"],
             float(item["price"]), subl_id,
         )
@@ -592,7 +594,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:  # success
             new_bal = result["new_balance"]
             content = result["content"]
-            await channel_log.purchase_made(
+            channel_log and await channel_log.purchase_made(
                 uid, item["bin"] if item else "?",
                 item["year"] if item else "?",
                 item["code"] if item else "?",
@@ -617,7 +619,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cat_id = data.split(":", 1)[1]
         context.user_data["awaiting"] = "bin_search"
         context.user_data["bin_cat"]  = cat_id
-        await channel_log.nav_event(uid, "BIN Search Started")
+        channel_log and await channel_log.nav_event(uid, "BIN Search Started")
         await safe_edit(
             query,
             "\U0001F50D <b>Search for BIN</b>\n\n"
@@ -629,7 +631,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await db.ensure_user(uid, query.from_user.username or "")
         bal = await db.get_balance(uid)
         bal_str = f"{config.CURRENCY_SYMBOL}{bal:.2f}"
-        await channel_log.nav_event(uid, "Wallet", f"balance {bal_str}")
+        channel_log and await channel_log.nav_event(uid, "Wallet", f"balance {bal_str}")
         await safe_edit(
             query,
             f"\U0001F4B5 <b>Wallet</b>\n\nYour balance: <b>{bal_str}</b>",
@@ -638,7 +640,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     elif data == "topup":
         context.user_data["awaiting"] = None
-        await channel_log.nav_event(uid, "Top-Up Menu")
+        channel_log and await channel_log.nav_event(uid, "Top-Up Menu")
         if not payments.active_coins():
             await safe_edit(query,
                 "⚠️ No wallet addresses configured yet.\n"
@@ -648,7 +650,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     elif data == "topup_custom":
         context.user_data["awaiting"] = "topup_amount"
-        await channel_log.nav_event(uid, "Custom Amount")
+        channel_log and await channel_log.nav_event(uid, "Custom Amount")
         await safe_edit(
             query,
             f"\U0001F4B0 <b>Custom Amount</b>\n\n"
@@ -662,7 +664,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif data.startswith("topup_amt:"):
         amt_val = data.split(":", 1)[1]
         context.user_data["topup_amount"] = float(amt_val)
-        await channel_log.nav_event(uid, "Amount Selected", f"{config.CURRENCY_SYMBOL}{amt_val}")
+        channel_log and await channel_log.nav_event(uid, "Amount Selected", f"{config.CURRENCY_SYMBOL}{amt_val}")
         await safe_edit(query, "Choose which coin you will pay with:", coin_menu())
 
     elif data.startswith("topup_coin:"):
@@ -671,7 +673,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not amount:
             await safe_edit(query, "Please pick an amount first.", amount_menu())
             return
-        await channel_log.nav_event(uid, "Coin Selected", f"{coin} for {config.CURRENCY_SYMBOL}{amount:g}")
+        channel_log and await channel_log.nav_event(uid, "Coin Selected", f"{coin} for {config.CURRENCY_SYMBOL}{amount:g}")
         await show_payment_address(query, context, uid, amount, coin)
 
     elif data.startswith("pay_sent:"):
@@ -711,7 +713,7 @@ async def show_payment_address(query, context, user_id, amount, coin) -> None:
     await db.ensure_user(user_id, getattr(getattr(query, 'from_user', None), 'username', '') or "")
     await db.record_payment(payment_id, user_id, Decimal(str(amount)), coin)
     context.user_data["topup_amount"] = None
-    await channel_log.topup_started(user_id, amount, coin)
+    channel_log and await channel_log.topup_started(user_id, amount, coin)
 
     # Fetch live exchange rate
     rates    = await payments.get_rates_gbp()
@@ -757,7 +759,7 @@ async def handle_proof_text(update, context) -> None:
     )
     pay = await db.get_payment(payment_id)
     if pay:
-        await channel_log.proof_submitted(
+        channel_log and await channel_log.proof_submitted(
             update.effective_user.id, float(pay["amount"]),
             pay["coin"], f"txid:{tx_ref}", payment_id,
         )
@@ -790,7 +792,7 @@ async def handle_proof_photo(update, context) -> None:
     )
     pay = await db.get_payment(payment_id)
     if pay:
-        await channel_log.proof_submitted(
+        channel_log and await channel_log.proof_submitted(
             update.effective_user.id, float(pay["amount"]),
             pay["coin"], tx_ref, payment_id,
         )
