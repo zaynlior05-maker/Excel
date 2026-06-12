@@ -1151,14 +1151,12 @@ def register_admin_handlers(app: Application) -> None:
         adm_button, pattern=r"^adm_"
     ))
 
-    # File uploads from admin (documents) — runs before text handler
+    # File uploads from admin — group 1 so it never blocks user messages in group 0
     app.add_handler(MessageHandler(
         filters.Document.ALL & filters.UpdateType.MESSAGE,
         adm_document,
-    ))
+    ), group=1)
 
-    # Admin text input — runs before the general on_text handler
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.UpdateType.MESSAGE,
-        adm_text,
-    ))
+    # NOTE: admin TEXT input is NOT registered here.
+    # bot.py's on_text() already routes to adm_text() when adm_awaiting is set.
+    # Registering it here caused ALL user text messages to be silently swallowed.
