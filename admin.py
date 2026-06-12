@@ -34,6 +34,7 @@ Inline panel sections:
 """
 
 import logging
+import time
 import uuid
 from decimal import Decimal, InvalidOperation
 
@@ -69,15 +70,25 @@ logger = logging.getLogger(__name__)
 # ============================================================
 #  Guard
 # ============================================================
-def is_admin(user_id: int) -> bool:
-    return user_id in config.ADMIN_IDS
+SESSION_HOURS = 2   # how long a password login lasts
+
+
+def is_admin(user_id: int, user_data: dict | None = None) -> bool:
+    """Admin by permanent ID or by active password session."""
+    if user_id in config.ADMIN_IDS:
+        return True
+    if user_data:
+        expires = user_data.get("admin_session_expires", 0)
+        if expires and time.time() < expires:
+            return True
+    return False
 
 
 def admin_only(fn):
-    """Decorator that silently drops calls from non-admins."""
+    """Decorator — passes if user is a permanent admin OR has an active session."""
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id if update.effective_user else 0
-        if not is_admin(uid):
+        if not is_admin(uid, context.user_data):
             return
         return await fn(update, context)
     wrapper.__name__ = fn.__name__
@@ -192,13 +203,71 @@ def user_detail_kb(user_id: int, banned: bool) -> InlineKeyboardMarkup:
 # ============================================================
 #  /admin command
 # ============================================================
-@admin_only
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid = update.effective_user.id
+    # Permanent admin — straight in
+    if is_admin(uid, context.user_data):
+        await update.message.reply_text(
+            "🛠️ <b>Admin Panel</b>\n\nChoose a section:",
+            reply_markup=admin_home_kb(),
+            parse_mode="HTML",
+        )
+        return
+    # Not verified yet — ask for password
+    if not config.ADMIN_PASSWORD:
+        await update.message.reply_text("⚠️ Admin password not configured.")
+        return
+    context.user_data["adm_awaiting_pw"] = True
     await update.message.reply_text(
+        "🔐 <b>Admin Login</b>\n\nEnter the admin password:",
+        parse_mode="HTML",
+    )
+
+
+async def handle_admin_password(update: Update,
+                                context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Called from bot.py when a user sends text while adm_awaiting_pw is set.
+    Returns True if handled (regardless of success/fail).
+    """
+    context.user_data.pop("adm_awaiting_pw", None)
+    password = update.message.text.strip()
+
+    # Delete the password message for security
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if not config.ADMIN_PASSWORD or password != config.ADMIN_PASSWORD:
+        await context.bot.send_message(
+            update.effective_user.id,
+            "❌ Wrong password. Access denied.",
+        )
+        await channel_log.log(
+            f"🚨 <b>Failed Admin Login</b>\n"
+            f"User: <code>{update.effective_user.id}</code>\n"
+            f"Username: @{update.effective_user.username or 'none'}"
+        )
+        return True
+
+    # Grant session
+    context.user_data["admin_session_expires"] = time.time() + SESSION_HOURS * 3600
+    uid = update.effective_user.id
+    await channel_log.log(
+        f"🔑 <b>Admin Login via Password</b>\n"
+        f"User: <code>{uid}</code>\n"
+        f"Username: @{update.effective_user.username or 'none'}\n"
+        f"Session expires in {SESSION_HOURS}h"
+    )
+    await context.bot.send_message(
+        uid,
+        f"✅ <b>Access granted!</b> Session lasts {SESSION_HOURS} hours.\n\n"
         "🛠️ <b>Admin Panel</b>\n\nChoose a section:",
         reply_markup=admin_home_kb(),
         parse_mode="HTML",
     )
+    return True
 
 
 # ============================================================
