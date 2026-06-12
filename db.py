@@ -369,6 +369,65 @@ async def get_stock_item(item_id: str) -> dict | None:
         return dict(row) if row else None
 
 
+async def purchase_item(user_id: int, item_id: str) -> dict:
+    """
+    Attempt to buy an item. Returns a result dict:
+      {"status": "success",       "content": ..., "price": ..., "new_balance": ...}
+      {"status": "not_available"}   item sold or missing
+      {"status": "insufficient",  "balance": ..., "price": ..., "shortfall": ...}
+    """
+    async with _pool.acquire() as con:
+        async with con.transaction():
+            item = await con.fetchrow(
+                "SELECT id,subl_id,bin,year,code,price,content "
+                "FROM stock WHERE id=$1 AND sold=FALSE FOR UPDATE",
+                item_id,
+            )
+            if not item:
+                return {"status": "not_available"}
+
+            user = await con.fetchrow(
+                "SELECT balance FROM users WHERE user_id=$1", user_id
+            )
+            balance = user["balance"] if user else Decimal("0")
+            price   = item["price"]
+
+            if balance < price:
+                return {
+                    "status":   "insufficient",
+                    "balance":  balance,
+                    "price":    price,
+                    "shortfall": price - balance,
+                }
+
+            # Deduct balance and mark sold
+            await con.execute(
+                "UPDATE users SET balance = balance - $2 WHERE user_id=$1",
+                user_id, price,
+            )
+            await con.execute(
+                "UPDATE stock SET sold=TRUE WHERE id=$1", item_id
+            )
+
+            # Record order
+            order_id = uuid.uuid4().hex[:12]
+            await con.execute(
+                "INSERT INTO orders(id,user_id,item_id,subl_id,amount) "
+                "VALUES($1,$2,$3,$4,$5)",
+                order_id, user_id, item_id, item["subl_id"], price,
+            )
+
+            new_bal = await con.fetchval(
+                "SELECT balance FROM users WHERE user_id=$1", user_id
+            )
+            return {
+                "status":      "success",
+                "content":     item["content"],
+                "price":       price,
+                "new_balance": new_bal,
+            }
+
+
 # ============================================================
 #  Orders
 # ============================================================
