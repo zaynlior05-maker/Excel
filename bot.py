@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 #  Text + keyboards
 # ============================================================
-def welcome_text() -> str:
+def Welcome_text() -> str:
     return (
         "Welcome to EXCEL Store 👋\n"
         "Use the menu below to interact with the bot 🤖\n"
@@ -294,7 +294,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Use the buttons below 👇", reply_markup=main_menu())
 
 
-async def cmd_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Anyone can use this to see their exact Telegram user ID."""
+    uid = update.effective_user.id
+    is_admin_user = uid in config.ADMIN_IDS
+    await update.message.reply_text(
+        f"🪪 Your Telegram ID: <code>{uid}</code>\n\n"
+        f"Admin access: {'✅ YES' if is_admin_user else '❌ NO — this ID is not in ADMIN_IDS'}\n\n"
+        f"ADMIN_IDS set in Railway: <code>{config.ADMIN_IDS or 'empty — not set!'}</code>",
+        parse_mode="HTML",
+    )
     u = update.effective_user
     await db.ensure_user(u.id, u.username or "")
     await update.message.reply_text(
@@ -344,6 +353,10 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 #  Text routing
 # ============================================================
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Admin password entry — must be first, before all other routing
+    if context.user_data.get("adm_awaiting_pw"):
+        await admin.handle_admin_password(update, context)
+        return
     if context.user_data.get("adm_awaiting"):
         await admin.adm_text(update, context)
         return
@@ -360,6 +373,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Handle reply-keyboard shortcuts — strip emojis and match loosely
     import re
+    txt   = update.message.text.strip().lower()
     clean = re.sub(r'[^\w\s]', '', txt).strip().lower()
     if "store" in clean:
         await cmd_store(update, context)
@@ -941,6 +955,7 @@ def main() -> None:
 
     app.add_error_handler(error_handler)
     app.add_handler(CommandHandler("start",   start))
+    app.add_handler(CommandHandler("myid",    cmd_myid))
     app.add_handler(CommandHandler("store",   cmd_store))
     app.add_handler(CommandHandler("wallet",  cmd_wallet))
     app.add_handler(CommandHandler("rules",   cmd_rules))
