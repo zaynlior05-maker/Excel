@@ -47,6 +47,19 @@ def welcome_text() -> str:
     )
 
 
+def _tg_url(https_url: str) -> str:
+    """
+    Convert https://t.me/username  →  tg://resolve?domain=username
+    This opens the profile directly with one tap, no preview dialog.
+    Falls back to the original URL if it doesn't match the expected format.
+    """
+    import re
+    match = re.match(r"https?://t\.me/([A-Za-z0-9_]+)", https_url.strip())
+    if match:
+        return f"tg://resolve?domain={match.group(1)}"
+    return https_url
+
+
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
@@ -59,9 +72,9 @@ def main_menu() -> InlineKeyboardMarkup:
                               callback_data="rules")],
         [
             InlineKeyboardButton(db.get_label("menu:support", "\u260E\uFE0F Support \u2197"),
-                                 url=config.SUPPORT_URL),
+                                 url=_tg_url(config.SUPPORT_URL)),
             InlineKeyboardButton(db.get_label("menu:channel", "\U0001F4C4 Channel \u2197"),
-                                 url=config.CHANNEL_URL),
+                                 url=_tg_url(config.CHANNEL_URL)),
         ],
     ])
 
