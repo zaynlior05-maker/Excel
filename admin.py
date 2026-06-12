@@ -34,6 +34,8 @@ Inline panel sections:
 """
 
 import logging
+import random
+import re
 import time
 import uuid
 from decimal import Decimal, InvalidOperation
@@ -65,6 +67,132 @@ except ImportError:
 import db
 
 logger = logging.getLogger(__name__)
+
+# ============================================================
+#  UK Outward Codes (used by auto-generation engine)
+# ============================================================
+UK_OUTCODES = [
+    # London
+    "E1","E2","E3","E4","E5","E6","E7","E8","E9","E10","E11","E12","E13","E14","E15","E16","E17","E18","E20",
+    "EC1","EC2","EC3","EC4",
+    "N1","N2","N3","N4","N5","N6","N7","N8","N9","N10","N11","N12","N13","N14","N15","N16","N17","N18","N19","N20","N21","N22",
+    "NW1","NW2","NW3","NW4","NW5","NW6","NW7","NW8","NW9","NW10","NW11",
+    "SE1","SE2","SE3","SE4","SE5","SE6","SE7","SE8","SE9","SE10","SE11","SE12","SE13","SE14","SE15","SE16","SE17","SE18","SE19","SE20","SE21","SE22","SE23","SE24","SE25","SE26","SE27","SE28",
+    "SW1","SW2","SW3","SW4","SW5","SW6","SW7","SW8","SW9","SW10","SW11","SW12","SW13","SW14","SW15","SW16","SW17","SW18","SW19","SW20",
+    "W1","W2","W3","W4","W5","W6","W7","W8","W9","W10","W11","W12","W13","W14",
+    "WC1","WC2",
+    # Midlands
+    "B1","B2","B3","B4","B5","B6","B7","B8","B9","B10","B11","B12","B13","B14","B15","B16","B17","B18","B19","B20",
+    "CV1","CV2","CV3","CV4","CV5","CV6","CV7","CV8",
+    "DE1","DE3","DE21","DE22","DE23","DE24",
+    "DY1","DY2","DY3","DY4","DY5","DY6","DY7","DY8","DY9","DY10","DY11",
+    "LE1","LE2","LE3","LE4","LE5","LE7","LE8","LE9","LE10",
+    "NG1","NG2","NG3","NG4","NG5","NG6","NG7","NG8","NG9","NG10",
+    "ST1","ST2","ST3","ST4","ST5","ST6","ST7","ST8",
+    "WR1","WR2","WR3","WR4","WR5",
+    "WS1","WS2","WS3","WS4","WS5","WS6","WS7","WS8","WS9","WS10","WS11","WS12",
+    "WV1","WV2","WV3","WV4","WV5","WV6","WV10","WV11","WV12","WV13","WV14",
+    # North West
+    "BB1","BB2","BB3","BB4","BB5","BB6","BB7","BB8","BB9","BB10","BB11","BB12",
+    "BL0","BL1","BL2","BL3","BL4","BL5","BL6","BL7","BL8","BL9",
+    "FY1","FY2","FY3","FY4","FY5","FY6","FY7","FY8",
+    "L1","L2","L3","L4","L5","L6","L7","L8","L9","L10","L11","L12","L13","L14","L15","L16","L17","L18","L19","L20",
+    "LA1","LA2","LA3","LA4","LA5",
+    "M1","M2","M3","M4","M5","M6","M7","M8","M9","M11","M12","M13","M14","M15","M16","M17","M18","M19","M20","M21","M22",
+    "OL1","OL2","OL3","OL4","OL5","OL6","OL7","OL8","OL9","OL10","OL11","OL12","OL13","OL14","OL15","OL16",
+    "PR1","PR2","PR3","PR4","PR5","PR6","PR7","PR8","PR9",
+    "SK1","SK2","SK3","SK4","SK5","SK6","SK7","SK8","SK9","SK10","SK11","SK12",
+    "WA1","WA2","WA3","WA4","WA5","WA6","WA7","WA8","WA9","WA10","WA11","WA12","WA13","WA14","WA15","WA16",
+    "WN1","WN2","WN3","WN4","WN5","WN6","WN7","WN8",
+    # Yorkshire
+    "BD1","BD2","BD3","BD4","BD5","BD6","BD7","BD8","BD9","BD10","BD11","BD12","BD13","BD14","BD15","BD16","BD17","BD18","BD19","BD20","BD21","BD22","BD23",
+    "DN1","DN2","DN3","DN4","DN5","DN6","DN7","DN8","DN9","DN10","DN11","DN12",
+    "HD1","HD2","HD3","HD4","HD5","HD6","HD7","HD8","HD9",
+    "HG1","HG2","HG3","HG4","HG5",
+    "HX1","HX2","HX3","HX4","HX5","HX6","HX7",
+    "LS1","LS2","LS3","LS4","LS5","LS6","LS7","LS8","LS9","LS10","LS11","LS12","LS13","LS14","LS15","LS16","LS17","LS18","LS19","LS20","LS21","LS22","LS23","LS24","LS25","LS26","LS27","LS28","LS29",
+    "S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","S11","S12","S13","S14",
+    "WF1","WF2","WF3","WF4","WF5","WF6","WF7","WF8","WF9","WF10","WF11","WF12","WF13","WF14","WF15","WF16","WF17",
+    "YO1","YO8","YO10","YO11","YO12","YO13","YO14","YO15","YO16","YO17","YO18","YO19","YO21","YO22","YO23","YO24","YO25","YO26",
+    # North East
+    "DH1","DH2","DH3","DH4","DH5","DH6","DH7","DH8","DH9",
+    "DL1","DL2","DL3","DL4","DL5","DL6","DL7","DL8","DL9","DL10","DL11","DL12","DL13","DL14","DL15","DL16","DL17",
+    "NE1","NE2","NE3","NE4","NE5","NE6","NE7","NE8","NE9","NE10","NE11","NE12","NE13","NE15","NE16","NE17","NE18","NE19","NE20","NE21","NE22","NE23","NE24","NE25","NE26","NE27","NE28","NE29","NE30","NE31","NE32","NE33","NE34","NE36","NE37","NE38","NE39","NE40","NE41","NE42","NE43","NE44","NE45","NE46","NE47","NE48","NE49",
+    "SR1","SR2","SR3","SR4","SR5","SR6","SR7",
+    "TS1","TS2","TS3","TS4","TS5","TS6","TS7","TS8","TS9","TS10","TS11","TS12","TS13","TS14","TS15","TS16","TS17","TS18","TS19","TS20","TS21","TS22","TS23","TS24","TS25","TS26","TS27","TS28","TS29",
+    # South East
+    "BN1","BN2","BN3","BN7","BN8","BN9","BN10","BN11","BN12","BN13","BN14","BN15","BN16","BN17","BN18",
+    "BR1","BR2","BR3","BR4","BR5","BR6","BR7","BR8",
+    "CR0","CR2","CR3","CR4","CR5","CR6","CR7","CR8","CR9",
+    "CT1","CT2","CT3","CT4","CT5","CT6","CT7","CT8","CT9","CT10","CT11","CT12","CT13","CT14","CT15","CT16","CT17","CT18","CT19","CT20","CT21",
+    "DA1","DA2","DA5","DA6","DA7","DA8","DA9","DA10","DA11","DA12","DA13","DA14","DA15","DA16","DA17","DA18",
+    "GU1","GU2","GU3","GU4","GU5","GU6","GU7","GU8","GU9","GU10","GU11","GU12","GU14","GU15","GU16","GU17","GU18","GU19","GU20","GU21","GU22","GU23","GU24","GU25","GU26","GU27",
+    "HA0","HA1","HA2","HA3","HA4","HA5","HA6","HA7","HA8","HA9",
+    "HP1","HP2","HP3","HP4","HP5","HP6","HP7","HP8","HP9","HP10","HP11","HP12","HP13","HP14","HP15","HP16","HP17","HP18","HP19","HP20","HP21","HP22","HP23",
+    "IG1","IG2","IG3","IG4","IG5","IG6","IG7","IG8","IG9","IG10","IG11",
+    "KT1","KT2","KT3","KT4","KT5","KT6","KT7","KT8","KT9","KT10","KT11","KT12","KT13","KT14","KT15","KT16","KT17","KT18","KT19","KT20","KT21","KT22","KT23","KT24",
+    "ME1","ME2","ME3","ME4","ME5","ME6","ME7","ME8","ME9","ME10","ME11","ME12","ME13","ME14","ME15","ME16","ME17","ME18","ME19","ME20",
+    "MK1","MK2","MK3","MK4","MK5","MK6","MK7","MK8","MK9","MK10","MK11","MK12","MK13","MK14","MK15","MK16","MK17","MK18","MK19","MK40","MK41","MK42","MK43","MK44","MK45","MK46",
+    "OX1","OX2","OX3","OX4","OX5","OX7","OX9","OX10","OX11","OX12","OX13","OX14","OX15","OX16","OX17","OX18","OX20","OX25","OX26","OX27","OX28","OX29","OX33","OX39","OX44","OX49",
+    "RG1","RG2","RG4","RG5","RG6","RG7","RG8","RG9","RG10","RG12","RG14","RG17","RG18","RG19","RG20","RG21","RG22","RG23","RG24","RG25","RG26","RG27","RG28","RG29","RG40","RG41","RG42","RG45",
+    "RH1","RH2","RH3","RH4","RH5","RH6","RH7","RH8","RH9","RH10","RH11","RH12","RH13","RH14","RH15","RH16","RH17","RH18","RH19","RH20",
+    "RM1","RM2","RM3","RM4","RM5","RM6","RM7","RM8","RM9","RM10","RM11","RM12","RM13","RM14","RM15","RM16","RM17","RM18","RM19","RM20",
+    "SL0","SL1","SL2","SL3","SL4","SL5","SL6","SL7","SL8","SL9",
+    "SM1","SM2","SM3","SM4","SM5","SM6","SM7",
+    "SS0","SS1","SS2","SS3","SS4","SS5","SS6","SS7","SS8","SS9","SS11","SS12","SS13","SS14","SS15","SS16","SS17",
+    "TN1","TN2","TN3","TN4","TN5","TN6","TN7","TN8","TN9","TN10","TN11","TN12","TN13","TN14","TN15","TN16","TN17","TN18","TN19","TN20","TN21","TN22","TN23","TN24","TN25","TN26","TN27","TN28","TN29","TN30","TN31","TN32","TN33","TN34","TN35","TN36","TN37","TN38","TN39","TN40",
+    "TW1","TW2","TW3","TW4","TW5","TW6","TW7","TW8","TW9","TW10","TW11","TW12","TW13","TW14","TW15","TW16","TW17","TW18","TW19","TW20",
+    "UB1","UB2","UB3","UB4","UB5","UB6","UB7","UB8","UB9","UB10","UB11",
+    "WD1","WD2","WD3","WD4","WD5","WD6","WD7","WD17","WD18","WD19","WD23","WD24","WD25",
+    # South West
+    "BA1","BA2","BA3","BA4","BA5","BA6","BA7","BA8","BA9","BA10","BA11","BA12","BA13","BA14","BA15","BA16","BA20","BA21","BA22",
+    "BH1","BH2","BH3","BH4","BH5","BH6","BH7","BH8","BH9","BH10","BH11","BH12","BH13","BH14","BH15","BH16","BH17","BH18","BH19","BH20","BH21","BH22","BH23","BH24","BH25",
+    "BS1","BS2","BS3","BS4","BS5","BS6","BS7","BS8","BS9","BS10","BS11","BS13","BS14","BS15","BS16","BS20","BS21","BS22","BS23","BS24","BS25","BS26","BS27","BS28","BS29","BS30","BS31","BS32","BS34","BS35","BS36","BS37","BS39","BS40","BS41","BS48","BS49",
+    "DT1","DT2","DT3","DT4","DT5","DT6","DT7","DT8","DT9","DT10","DT11",
+    "EX1","EX2","EX3","EX4","EX5","EX6","EX7","EX8","EX9","EX10","EX11","EX12","EX13","EX14","EX15","EX16","EX17","EX18","EX19","EX20","EX21","EX22","EX23","EX24","EX31","EX32","EX33","EX34","EX35","EX36","EX37","EX38","EX39",
+    "GL1","GL2","GL3","GL4","GL5","GL6","GL7","GL8","GL9","GL10","GL11","GL12","GL13","GL14","GL15","GL16","GL17","GL18","GL19","GL20","GL50","GL51","GL52","GL53","GL54","GL55","GL56",
+    "PL1","PL2","PL3","PL4","PL5","PL6","PL7","PL8","PL9","PL10","PL11","PL12","PL14","PL15","PL17","PL18","PL19","PL20","PL21","PL22","PL23","PL24","PL25","PL26","PL27","PL28","PL30","PL31","PL32","PL33","PL34","PL35",
+    "SN1","SN2","SN3","SN4","SN5","SN6","SN7","SN8","SN9","SN10","SN11","SN12","SN13","SN14","SN15","SN16","SN25","SN26",
+    "SO14","SO15","SO16","SO17","SO18","SO19","SO20","SO21","SO22","SO23","SO24","SO30","SO31","SO32","SO40","SO41","SO42","SO43","SO45","SO50","SO51","SO52","SO53",
+    "SP1","SP2","SP3","SP4","SP5","SP6","SP7","SP8","SP9","SP10","SP11",
+    "TA1","TA2","TA3","TA4","TA5","TA6","TA7","TA8","TA9","TA10","TA11","TA12","TA19","TA20","TA21","TA22","TA23","TA24",
+    "TQ1","TQ2","TQ3","TQ4","TQ5","TQ6","TQ7","TQ8","TQ9","TQ10","TQ11","TQ12","TQ13","TQ14",
+    "TR1","TR2","TR3","TR4","TR5","TR6","TR7","TR8","TR9","TR10","TR11","TR12","TR13","TR14","TR15","TR16","TR17","TR18","TR19","TR20","TR26","TR27",
+    # East of England
+    "CB1","CB2","CB3","CB4","CB5","CB6","CB7","CB8","CB9","CB10","CB11","CB21","CB22","CB23","CB24","CB25",
+    "CM1","CM2","CM3","CM4","CM5","CM6","CM7","CM8","CM9","CM11","CM12","CM13","CM14","CM15","CM16","CM17","CM18","CM19","CM20","CM21","CM22","CM23","CM24",
+    "CO1","CO2","CO3","CO4","CO5","CO6","CO7","CO9","CO10","CO11","CO12","CO13","CO15","CO16",
+    "IP1","IP2","IP3","IP4","IP5","IP6","IP7","IP8","IP9","IP10","IP11","IP12","IP13","IP14","IP17","IP18","IP19","IP20","IP21","IP22","IP23","IP24","IP25","IP26","IP27","IP28","IP29","IP30","IP31","IP32","IP33",
+    "LU1","LU2","LU3","LU4","LU5","LU6","LU7",
+    "NR1","NR2","NR3","NR4","NR5","NR6","NR7","NR8","NR9","NR10","NR11","NR12","NR13","NR14","NR15","NR16","NR17","NR18","NR19","NR20","NR21","NR22","NR23","NR24","NR25","NR26","NR27","NR28","NR29","NR30","NR31","NR32","NR33","NR34","NR35",
+    "PE1","PE2","PE3","PE4","PE5","PE6","PE7","PE8","PE9","PE10","PE11","PE12","PE13","PE14","PE15","PE16","PE19","PE20","PE21","PE22","PE23","PE24","PE25","PE26","PE27","PE28","PE29","PE30","PE31","PE32","PE33","PE34","PE35","PE36","PE37","PE38",
+    "SG1","SG2","SG3","SG4","SG5","SG6","SG7","SG8","SG9","SG10","SG11","SG12","SG13","SG14","SG15","SG16","SG17","SG18","SG19",
+    # East Midlands
+    "DE55","DE56","DE65","DE72","DE73","DE74",
+    "LE11","LE12","LE13","LE14","LE15","LE16","LE17","LE18","LE19",
+    "LN1","LN2","LN3","LN4","LN5","LN6","LN7","LN8","LN9","LN10","LN11","LN12","LN13",
+    "MK40","MK41","MK42","MK43","MK44","MK45","MK46",
+    "NN1","NN2","NN3","NN4","NN5","NN6","NN7","NN8","NN9","NN10","NN11","NN12","NN13","NN14","NN15","NN16","NN17","NN18","NN29",
+    "PE9","PE10","PE11",
+    # South
+    "PO1","PO2","PO3","PO4","PO5","PO6","PO7","PO8","PO9","PO10","PO11","PO12","PO13","PO14","PO15","PO16","PO17","PO18","PO19","PO20","PO21","PO22","PO30","PO31","PO32","PO33","PO34","PO35","PO36","PO37","PO38","PO39","PO40","PO41",
+    # Wales
+    "CF10","CF11","CF14","CF15","CF23","CF24","CF3","CF5","CF62","CF63","CF64","CF71",
+    "NP1","NP4","NP7","NP8","NP10","NP11","NP12","NP13","NP15","NP16","NP18","NP19","NP20","NP22","NP23","NP24","NP25","NP26","NP44",
+    "SA1","SA2","SA3","SA4","SA5","SA6","SA7","SA8","SA9","SA10","SA11","SA12","SA13","SA14","SA15","SA16","SA17","SA18","SA19","SA20",
+    # Scotland
+    "AB10","AB11","AB12","AB13","AB14","AB15","AB16","AB21","AB22","AB23","AB24","AB25","AB30","AB31","AB32","AB33","AB34","AB35","AB36","AB37","AB38","AB39","AB41","AB42","AB43","AB44","AB45","AB51","AB52","AB53","AB54","AB55","AB56",
+    "DD1","DD2","DD3","DD4","DD5","DD6","DD7","DD8","DD9","DD10","DD11",
+    "EH1","EH2","EH3","EH4","EH5","EH6","EH7","EH8","EH9","EH10","EH11","EH12","EH13","EH14","EH15","EH16","EH17","EH18","EH19","EH20","EH21","EH22","EH23","EH24","EH25","EH26","EH27","EH28","EH29","EH30","EH31","EH32","EH33","EH34","EH35","EH36","EH37","EH38","EH39","EH40","EH41","EH42","EH43","EH44","EH45","EH46","EH47","EH48","EH49","EH51","EH52","EH53","EH54","EH55",
+    "FK1","FK2","FK3","FK4","FK5","FK6","FK7","FK8","FK9","FK10","FK11","FK12","FK13","FK14","FK15","FK16","FK17","FK18","FK19","FK20","FK21",
+    "G1","G2","G3","G4","G5","G11","G12","G13","G14","G15","G20","G21","G22","G23","G31","G32","G33","G34","G40","G41","G42","G43","G44","G45","G46","G51","G52","G53","G60","G61","G62","G63","G64","G65","G66","G67","G68","G69","G71","G72","G73","G74","G75","G76","G77","G78","G81","G82","G83","G84",
+    "KA1","KA2","KA3","KA4","KA5","KA6","KA7","KA8","KA9","KA10","KA11","KA12","KA13","KA14","KA15","KA16","KA17","KA18","KA19","KA20","KA21","KA22","KA23","KA24","KA25","KA26","KA27","KA28","KA29","KA30",
+    "KY1","KY2","KY3","KY4","KY5","KY6","KY7","KY8","KY9","KY10","KY11","KY12","KY13","KY14","KY15","KY16",
+    "ML1","ML2","ML3","ML4","ML5","ML6","ML7","ML8","ML9","ML10","ML11","ML12",
+    "PA1","PA2","PA3","PA4","PA5","PA6","PA7","PA8","PA9","PA10","PA11","PA12","PA13","PA14","PA15","PA16","PA17","PA18","PA19","PA20","PA21","PA22","PA23","PA24","PA25","PA26","PA27","PA28","PA29","PA30","PA31","PA32","PA33","PA34","PA35","PA36","PA37","PA38","PA41","PA42","PA43","PA44","PA45","PA46","PA47","PA48","PA49","PA60","PA61","PA62","PA63","PA64","PA65","PA66","PA67","PA68","PA69","PA70","PA71","PA72","PA73","PA74","PA75","PA76","PA77","PA78",
+    "PH1","PH2","PH3","PH4","PH5","PH6","PH7","PH8","PH9","PH10","PH11","PH12","PH13","PH14","PH15","PH16","PH17","PH18","PH19","PH20","PH21","PH22","PH23","PH24","PH25","PH26","PH30","PH31","PH32","PH33","PH34","PH35","PH36","PH37","PH38","PH39","PH40","PH41","PH42","PH43","PH44","PH49","PH50",
+    "TD1","TD2","TD3","TD4","TD5","TD6","TD7","TD8","TD9","TD10","TD11","TD12","TD13","TD14","TD15",
+]
 
 
 # ============================================================
@@ -435,12 +563,16 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         label = _subl_label(subl_id)
         await _safe_edit(
             query,
-            f"➕ <b>Add Item to {label}</b>\n\n"
-            "Send the item in this format (pipe-separated):\n"
+            f"➕ <b>Add Items to {label}</b>\n\n"
+            "<b>Auto-generate mode (multiplier):</b>\n"
+            "<code>BIN|YEAR|CODE x[COUNT]</code>\n"
+            "<code>BIN|YEAR|CODE|PRICE x[COUNT]</code>\n"
+            "e.g. <code>459667|2012|Ex3 x10</code> → generates 10 items\n"
+            "     <code>459667|2012|Ex3|8 x10</code> → 10 items at £8\n\n"
+            "<b>Direct import mode:</b>\n"
             "<code>BIN|YEAR|CODE|PRICE|CONTENT</code>\n\n"
-            "Example:\n"
-            "<code>459667|2012|Ex3|5|4597xx 09/28 123 John Doe</code>\n\n"
-            "You can paste multiple lines to add them in bulk.",
+            "Mix both formats in the same file.\n"
+            "Lines starting with <code>#</code> are skipped.",
             InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Cancel", callback_data=f"adm_slist:{subl_id}")
             ]]),
@@ -786,33 +918,27 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ============================================================
 async def _handle_add_item(update, context) -> None:
     subl_id = context.user_data.get("adm_subl", "")
-    lines   = [l.strip() for l in update.message.text.strip().splitlines() if l.strip()]
-    added, failed = 0, 0
-    for line in lines:
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) < 5:
-            failed += 1
-            continue
-        bin_, year, code = parts[0], parts[1], parts[2]
-        content = "|".join(parts[4:])   # content may contain pipes
-        try:
-            price = Decimal(parts[3])
-            if not bin_.isdigit() or len(bin_) < 4:
-                raise ValueError
-        except (InvalidOperation, ValueError):
-            failed += 1
-            continue
-        await db.add_stock_item(subl_id, bin_, year, code, price, content)
-        added += 1
+    raw     = update.message.text.strip()
+    rows, skipped, errors = _parse_stock_file(raw, subl_id)
 
     context.user_data["adm_awaiting"] = None
-    items = await db.get_stock(subl_id)
-    label = _subl_label(subl_id)
-    result = f"✅ Added {added} item(s)."
-    if failed:
-        result += f"  ⚠️ {failed} line(s) skipped (wrong format)."
+    added, duplicate = 0, 0
+    if rows:
+        result    = await db.bulk_add_stock_items(rows)
+        added     = result["inserted"]
+        duplicate = result["duplicate"]
+
+    items  = await db.get_stock(subl_id)
+    label  = _subl_label(subl_id)
+    msg    = f"✅ Added <b>{added}</b> item(s)."
+    if duplicate:
+        msg += f"  ♻️ {duplicate} duplicate(s) skipped."
+    if skipped:
+        msg += f"  ⚠️ {skipped} line(s) skipped (bad format)."
+    if errors:
+        msg += "\n\nSample bad lines:\n" + "\n".join(f"  • {e}" for e in errors)
     await update.message.reply_text(
-        f"{result}\n\n📦 <b>{label}</b> now has {len(items)} item(s) in stock.",
+        f"{msg}\n\n📦 <b>{label}</b> now has <b>{len(items)}</b> item(s) in stock.",
         reply_markup=stock_list_kb(subl_id, items),
         parse_mode="HTML",
     )
@@ -1127,26 +1253,54 @@ async def _safe_edit(query, text, reply_markup) -> None:
 #  File parser
 # ============================================================
 def _detect_delimiter(line: str) -> str:
-    """Pick the delimiter that gives ≥5 fields on the first data line."""
     for sep in ("|", ",", "\t"):
-        if len(line.split(sep)) >= 5:
+        if len(line.split(sep)) >= 3:
             return sep
-    return "|"  # fallback — let validation catch bad lines
+    return "|"
+
+
+def _generate_items(bin_: str, price: Decimal,
+                    subl_id: str, count: int) -> list[tuple]:
+    """
+    Auto-generate `count` unique rows from a single BIN.
+    Each row gets a random year (1930-1988) and a random UK outcode.
+    Content (customer delivery) is stored as  BIN|YEAR|OUTCODE
+    """
+    rows = []
+    for _ in range(count):
+        year  = str(random.randint(1930, 1988))
+        code  = random.choice(UK_OUTCODES)
+        content = f"{bin_}|{year}|{code}"
+        rows.append((uuid.uuid4().hex[:8], subl_id, bin_, year, code, price, content))
+    return rows
 
 
 def _parse_stock_file(raw: str, subl_id: str) -> tuple[list[tuple], int, list[str]]:
     """
     Parse file text into DB-ready tuples.
-    Returns (rows, skipped_count, sample_errors).
-    Each row = (id, subl_id, bin, year, code, price, content).
+    Supports two modes on the same file:
+
+    MODE A — Auto-generation (multiplier format):
+        BIN|SEED_YEAR|SEED_CODE x[N]
+        BIN|SEED_YEAR|SEED_CODE|PRICE x[N]
+        → Generates N unique rows with randomised year (1930-1988) and UK outcode.
+          SEED_YEAR and SEED_CODE are discarded; only BIN and optional PRICE are used.
+        e.g.  459667|2012|Ex3 x10        → 10 generated rows at default £5
+              459667|2012|Ex3|10 x10     → 10 generated rows at £10
+
+    MODE B — Direct import (no multiplier):
+        BIN|YEAR|CODE|PRICE|CONTENT
+        → Imported exactly as-is.
+
+    Returns (rows, skipped_count, sample_error_lines).
     """
-    lines = [l.rstrip() for l in raw.splitlines()]
-    # Find first non-blank, non-comment line to detect delimiter.
-    data_lines = [l for l in lines if l and not l.startswith("#")]
+    lines      = [l.rstrip() for l in raw.splitlines()]
+    data_lines = [l for l in lines if l.strip() and not l.startswith("#")]
     if not data_lines:
         return [], 0, []
 
     sep = _detect_delimiter(data_lines[0])
+
     rows: list[tuple] = []
     skipped  = 0
     errors: list[str] = []
@@ -1154,43 +1308,59 @@ def _parse_stock_file(raw: str, subl_id: str) -> tuple[list[tuple], int, list[st
     for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("#"):
-            continue                              # blank / comment
-
-        parts = line.split(sep)
-        if len(parts) < 5:
-            skipped += 1
-            if len(errors) < 3:
-                errors.append(f"<code>{line[:60]}</code>")
             continue
 
-        bin_  = parts[0].strip()
-        year  = parts[1].strip()
-        code  = parts[2].strip()
-        raw_price = parts[3].strip().lstrip("£$€")
-        # Content = everything after the 4th field, rejoined with the delimiter.
-        content = sep.join(parts[4:]).strip()
+        # ── Detect multiplier (x10, x187, etc.) anywhere at end of line ──
+        mult_match = re.search(r'\bx(\d+)\s*$', line, re.IGNORECASE)
 
-        # Validate
-        if not bin_.isdigit() or len(bin_) < 4:
-            skipped += 1
-            if len(errors) < 3:
-                errors.append(f"Bad BIN: <code>{line[:60]}</code>")
-            continue
-        try:
-            price = Decimal(raw_price)
-        except InvalidOperation:
-            skipped += 1
-            if len(errors) < 3:
-                errors.append(f"Bad price: <code>{line[:60]}</code>")
-            continue
-        if not content:
-            skipped += 1
-            if len(errors) < 3:
-                errors.append(f"Empty content: <code>{line[:60]}</code>")
-            continue
+        if mult_match:
+            # ── MODE A: generation ──
+            count    = int(mult_match.group(1))
+            base     = line[:mult_match.start()].rstrip()
+            parts    = [p.strip() for p in base.split(sep)]
 
-        item_id = uuid.uuid4().hex[:8]
-        rows.append((item_id, subl_id, bin_, year, code, price, content))
+            if len(parts) < 1 or not parts[0].isdigit() or len(parts[0]) < 4:
+                skipped += count
+                if len(errors) < 3:
+                    errors.append(f"Bad BIN in: <code>{line[:50]}</code>")
+                continue
+
+            bin_ = parts[0]
+            # Optional price in 4th segment
+            price = Decimal("5")   # default
+            if len(parts) >= 4:
+                try:
+                    price = Decimal(parts[3].lstrip("£$€"))
+                    if price <= 0:
+                        price = Decimal("5")
+                except InvalidOperation:
+                    pass
+
+            rows.extend(_generate_items(bin_, price, subl_id, count))
+
+        else:
+            # ── MODE B: direct import ──
+            parts = [p.strip() for p in line.split(sep)]
+            if len(parts) < 5:
+                skipped += 1
+                continue
+            bin_      = parts[0]
+            year      = parts[1]
+            code      = parts[2]
+            raw_price = parts[3].lstrip("£$€")
+            content   = sep.join(parts[4:]).strip()
+            if not bin_.isdigit() or len(bin_) < 4:
+                skipped += 1
+                continue
+            try:
+                price = Decimal(raw_price)
+            except InvalidOperation:
+                skipped += 1
+                continue
+            if not content:
+                skipped += 1
+                continue
+            rows.append((uuid.uuid4().hex[:8], subl_id, bin_, year, code, price, content))
 
     return rows, skipped, errors
 
