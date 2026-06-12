@@ -906,39 +906,65 @@ async def _handle_label_edit(update, context) -> None:
 # ============================================================
 @admin_only
 async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Usage: /price LIST_ID NEW_PRICE  e.g. /price dd-28th 8"""
+    """Usage: /price LIST_ID_OR_NAME NEW_PRICE  e.g. /price dd-28th 8"""
     args = context.args or []
     if len(args) < 2:
-        valid = "\n".join(
-            f"  <code>{s['id']}</code>  {s['label']}"
+        lines = ["Usage: <code>/price LIST_ID NEW_PRICE</code>\n",
+                 "Example: <code>/price dd-28th 8</code>\n",
+                 "Lists (use ID <b>or</b> current name):\n"]
+        for cat in config.CATEGORIES:
+            for s in cat.get("sublists", []):
+                current = db.get_label(f"subl:{s['id']}", s["label"])
+                lines.append(f"  <code>{s['id']}</code> → {current}")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        return
+
+    # Accept first word(s) as the list identifier — everything except last token
+    raw_price = args[-1]
+    raw_id    = " ".join(args[:-1]).strip().lower()
+
+    # Match by ID first, then by current label (so renamed bases work too)
+    matched_id = None
+    for cat in config.CATEGORIES:
+        for s in cat.get("sublists", []):
+            if s["id"] == raw_id:
+                matched_id = s["id"]
+                break
+            current_label = db.get_label(f"subl:{s['id']}", s["label"])
+            # strip emoji and compare
+            import re
+            clean_label = re.sub(r'[^\w\s-]', '', current_label).strip().lower()
+            clean_input = re.sub(r'[^\w\s-]', '', raw_id).strip().lower()
+            if clean_label == clean_input or s["id"] == clean_input:
+                matched_id = s["id"]
+                break
+
+    if not matched_id:
+        valid = ", ".join(
+            f"<code>{s['id']}</code>"
             for cat in config.CATEGORIES
             for s in cat.get("sublists", [])
         )
         await update.message.reply_text(
-            "Usage: <code>/price LIST_ID NEW_PRICE</code>\n\n"
-            "Example: <code>/price dd-28th 8</code>\n\n"
-            "Valid list IDs:\n" + valid,
+            f"❌ List not found: <code>{raw_id}</code>\n"
+            f"Valid IDs: {valid}",
             parse_mode="HTML",
         )
         return
-    subl_id = args[0].lower()
-    valid_ids = [s["id"] for cat in config.CATEGORIES for s in cat.get("sublists", [])]
-    if subl_id not in valid_ids:
-        await update.message.reply_text(
-            f"❌ Unknown list: <code>{subl_id}</code>\n"
-            "Valid IDs: " + ", ".join(f"<code>{i}</code>" for i in valid_ids),
-            parse_mode="HTML",
-        )
-        return
+
     try:
-        price = Decimal(args[1].lstrip(config.CURRENCY_SYMBOL))
+        price = Decimal(raw_price.lstrip(config.CURRENCY_SYMBOL))
         if price <= 0:
             raise ValueError
     except (InvalidOperation, ValueError):
-        await update.message.reply_text("Please provide a valid price, e.g. <code>8</code>", parse_mode="HTML")
+        await update.message.reply_text(
+            "Please provide a valid price, e.g. <code>8</code>",
+            parse_mode="HTML",
+        )
         return
-    count = await db.set_sublist_price(subl_id, price)
-    label = _subl_label(subl_id)
+
+    count = await db.set_sublist_price(matched_id, price)
+    label = db.get_label(f"subl:{matched_id}", _subl_label(matched_id))
     await update.message.reply_text(
         f"✅ <b>{label}</b> — price updated to <b>{config.CURRENCY_SYMBOL}{price:g}</b>\n"
         f"Items updated: <b>{count}</b>",
