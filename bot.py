@@ -42,16 +42,15 @@ logger = logging.getLogger(__name__)
 # ============================================================
 #  Text + keyboards
 # ============================================================
-def welcome_text() -> str:
+def Welcome_text() -> str:
     return (
-        f"\U0001F539 Support account is available 24/7 {config.SUPPORT_HANDLE}\n"
-        "\U0001F539\n"
-        "\U0001F539 <b>BY PURCHASING YOU AGREE TO THESE RULES. "
-        "FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. "
-        "WE SHALL GIVE NO WARNINGS</b>\n\n"
-        "Welcome to the Store \U0001F44B\n"
-        "Use the menu below to interact with the bot \U0001F916"
+        "Welcome to EXCEL Store 👋\n"
+        "Use the menu below to interact with the bot 🤖\n"
+        "===============\n"
+        "Managed by @EXCELV1\n"
+        "Coded by @EXCELV1 on session 05a5c62989edb4dadf7cb1274e35e37d498b5af459b04e08fe08ab037a206ec841"
     )
+
 
 
 def _tg_url(https_url: str) -> str:
@@ -137,12 +136,7 @@ def format_line(item) -> str:
 
 
 def lines_menu(cat_id, subl_id, items, page=0) -> InlineKeyboardMarkup:
-    """
-    One button per line on this page, then nav block:
-       🔄 Refresh | Next ➡️
-       ⬅️ Previous Menu   (full-width)
-       🌏 Main Menu        (full-width)
-    """
+    """All buttons are full-width single rows — no side-by-side buttons."""
     per         = config.ITEMS_PER_PAGE
     total_pages = max(1, (len(items) + per - 1) // per)
     page        = max(0, min(page, total_pages - 1))
@@ -152,24 +146,29 @@ def lines_menu(cat_id, subl_id, items, page=0) -> InlineKeyboardMarkup:
         format_line(it), callback_data=f"line:{subl_id}:{it['id']}")]
         for it in page_items]
 
-    nav = [InlineKeyboardButton(
+    # Navigation — every button is its own full-width row
+    rows.append([InlineKeyboardButton(
         "\U0001F504 Refresh",
         callback_data=f"page:{cat_id}:{subl_id}:{page}",
-    )]
+    )])
     if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(
+        rows.append([InlineKeyboardButton(
             "Next \u27A1\uFE0F",
             callback_data=f"page:{cat_id}:{subl_id}:{page + 1}",
-        ))
-    rows.append(nav)
-    # "Previous Menu" back button — show the live sublist name
+        )])
+    if page > 0:
+        rows.append([InlineKeyboardButton(
+            "\u2B05\uFE0F Previous Page",
+            callback_data=f"page:{cat_id}:{subl_id}:{page - 1}",
+        )])
+
     subl_default = next(
         (s["label"] for cat in config.CATEGORIES
          for s in cat.get("sublists", []) if s["id"] == subl_id),
         subl_id,
     )
     rows.append([InlineKeyboardButton(
-        f"\u2B05\uFE0F {db.get_label(f'subl:{subl_id}', subl_default)}",
+        f"\U0001F519 {db.get_label(f'subl:{subl_id}', subl_default)}",
         callback_data=f"cat:{cat_id}",
     )])
     rows.append([InlineKeyboardButton(
@@ -237,7 +236,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     username = update.effective_user.username or ""
     existing = await db.get_user_info(uid)
     is_new   = existing is None
-    await db.ensure_user(uid)
+    await db.ensure_user(uid, username)
     await channel_log.user_start(uid, username, is_new)
     if await db.is_banned(uid):
         await update.message.reply_text(
@@ -246,11 +245,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=ReplyKeyboardRemove(),
         )
         return
+    # 1 — Refund policy first (clears old keyboard too)
     await update.message.reply_text(
-        welcome_text(),
+        config.REFUND_RULES_TEXT,
         reply_markup=ReplyKeyboardRemove(),
         parse_mode="HTML",
     )
+    # 2 — Welcome banner
+    await update.message.reply_text(
+        welcome_text(),
+        parse_mode="HTML",
+    )
+    # 3 — Menu buttons
     await update.message.reply_text(
         "Use the buttons below 👇",
         reply_markup=main_menu(),
@@ -258,7 +264,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await db.ensure_user(update.effective_user.id)
+    u = update.effective_user
+    await db.ensure_user(u.id, u.username or "")
     await update.message.reply_text(
         "\U0001F6D2 <b>Store</b>\n\nChoose a category:",
         reply_markup=store_menu(),
@@ -267,8 +274,9 @@ async def cmd_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid = update.effective_user.id
-    await db.ensure_user(uid)
+    u   = update.effective_user
+    uid = u.id
+    await db.ensure_user(uid, u.username or "")
     bal = await db.get_balance(uid)
     bal_str = f"{config.CURRENCY_SYMBOL}{bal:.2f}"
     await update.message.reply_text(
@@ -430,12 +438,15 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid   = query.from_user.id
 
     if data == "menu":
+        await channel_log.nav_event(uid, "Main Menu")
         await safe_edit(query, welcome_text(), main_menu())
 
     elif data == "rules":
+        await channel_log.nav_event(uid, "Rules")
         await safe_edit(query, config.RULES_TEXT, back_menu())
 
     elif data == "store":
+        await channel_log.nav_event(uid, "Store")
         await safe_edit(query, "\U0001F6D2 <b>Store</b>\n\nChoose a category:", store_menu())
 
     elif data.startswith("cat:"):
@@ -444,6 +455,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not cat:
             await safe_edit(query, "Category not found.", store_menu())
             return
+        await channel_log.nav_event(uid, "Category", db.get_label(f"cat:{cat_id}", cat["label"] if cat else cat_id))
         if not cat.get("sublists"):
             await safe_edit(query, f"{cat['label']}\n\nNo lists yet.",
                             sublist_back_menu(cat_id))
@@ -457,6 +469,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not subl:
             await safe_edit(query, "List not found.", store_menu())
             return
+        subl_label = db.get_label(f"subl:{subl_id}", subl["label"])
+        await channel_log.nav_event(uid, "Sublist", subl_label)
         items = await db.get_stock(subl_id)
         if not items:
             await safe_edit(query, f"{subl['label']}\n\nNo lines in stock right now.",
@@ -522,15 +536,18 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             float(item["price"]), subl_id,
         )
         await safe_edit(
+            query,
+            f"<b>{format_line(item)}</b>\n\n"
+            f"BIN:          <code>{item['bin']}</code>\n"
             f"Year:         {item['year']}\n"
             f"Code/Region:  {item['code']}\n"
             f"Price:        <b>{config.CURRENCY_SYMBOL}{price_str}</b>\n"
             f"Your balance: {config.CURRENCY_SYMBOL}{bal:.2f}\n\n"
             + ("✅ You have enough balance to buy." if can_buy else
-               f"⚠️ You need <b>{config.CURRENCY_SYMBOL}{float(shortfall):g}</b> more. Tap to top up."),
+               f"⚠️ You need <b>{config.CURRENCY_SYMBOL}{float(shortfall):g}</b> more to buy this."),
             InlineKeyboardMarkup([
                 buy_row,
-                [InlineKeyboardButton("\u2B05\uFE0F Back",
+                [InlineKeyboardButton("\u2B05\uFE0F Back to List",
                                       callback_data=f"subl:{cat_id}:{subl_id}")],
                 [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
             ]),
@@ -600,6 +617,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cat_id = data.split(":", 1)[1]
         context.user_data["awaiting"] = "bin_search"
         context.user_data["bin_cat"]  = cat_id
+        await channel_log.nav_event(uid, "BIN Search Started")
         await safe_edit(
             query,
             "\U0001F50D <b>Search for BIN</b>\n\n"
@@ -608,9 +626,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
     elif data == "wallet":
-        await db.ensure_user(uid)
+        await db.ensure_user(uid, query.from_user.username or "")
         bal = await db.get_balance(uid)
         bal_str = f"{config.CURRENCY_SYMBOL}{bal:.2f}"
+        await channel_log.nav_event(uid, "Wallet", f"balance {bal_str}")
         await safe_edit(
             query,
             f"\U0001F4B5 <b>Wallet</b>\n\nYour balance: <b>{bal_str}</b>",
@@ -619,6 +638,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     elif data == "topup":
         context.user_data["awaiting"] = None
+        await channel_log.nav_event(uid, "Top-Up Menu")
         if not payments.active_coins():
             await safe_edit(query,
                 "⚠️ No wallet addresses configured yet.\n"
@@ -628,6 +648,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     elif data == "topup_custom":
         context.user_data["awaiting"] = "topup_amount"
+        await channel_log.nav_event(uid, "Custom Amount")
         await safe_edit(
             query,
             f"\U0001F4B0 <b>Custom Amount</b>\n\n"
@@ -639,7 +660,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
     elif data.startswith("topup_amt:"):
-        context.user_data["topup_amount"] = float(data.split(":", 1)[1])
+        amt_val = data.split(":", 1)[1]
+        context.user_data["topup_amount"] = float(amt_val)
+        await channel_log.nav_event(uid, "Amount Selected", f"{config.CURRENCY_SYMBOL}{amt_val}")
         await safe_edit(query, "Choose which coin you will pay with:", coin_menu())
 
     elif data.startswith("topup_coin:"):
@@ -648,6 +671,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not amount:
             await safe_edit(query, "Please pick an amount first.", amount_menu())
             return
+        await channel_log.nav_event(uid, "Coin Selected", f"{coin} for {config.CURRENCY_SYMBOL}{amount:g}")
         await show_payment_address(query, context, uid, amount, coin)
 
     elif data.startswith("pay_sent:"):
@@ -684,7 +708,7 @@ async def show_payment_address(query, context, user_id, amount, coin) -> None:
 
     address    = coins[coin]
     payment_id = payments.new_payment_id()
-    await db.ensure_user(user_id)
+    await db.ensure_user(user_id, getattr(getattr(query, 'from_user', None), 'username', '') or "")
     await db.record_payment(payment_id, user_id, Decimal(str(amount)), coin)
     context.user_data["topup_amount"] = None
     await channel_log.topup_started(user_id, amount, coin)
