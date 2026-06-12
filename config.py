@@ -12,9 +12,13 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")   # auto-set by Railway Postgr
 # ---- Admin access ----
 # Set ADMIN_IDS in Railway as comma-separated Telegram user IDs.
 # Find your ID by messaging @userinfobot in Telegram.
-# Example: ADMIN_IDS=123456789,987654321
 _raw_ids = os.environ.get("ADMIN_IDS", "")
 ADMIN_IDS: set[int] = {int(x.strip()) for x in _raw_ids.split(",") if x.strip().isdigit()}
+
+# ---- Admin password ----
+# Anyone (including you) can type /admin then this password to get access.
+# Set ADMIN_PASSWORD in Railway Variables. Sessions last 2 hours.
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
 # ---- Log channel ----
 # Every bot event is sent here.
@@ -68,13 +72,13 @@ REVIEW_TIME = os.environ.get("REVIEW_TIME", "within 30 minutes")
 CATEGORIES = [
     {
         "id": "ff",
-        "label": "🗓️ Fullz",
+        "label": "🗓️ FF",
         "sublists": [
-            {"id": "dd-28th",  "label": "🔸 5-base"},
-            {"id": "dd-4th",   "label": "🔸 10-pound"},
-            {"id": "dd-7th",   "label": "🔸 DVLA-28th_may"},
-            {"id": "5-base",   "label": "🔸 DVLA-12th_jun"},
-
+            {"id": "dd-28th",  "label": "🔸 DD-28th"},
+            {"id": "dd-4th",   "label": "🔸 DD-4th"},
+            {"id": "dd-7th",   "label": "🔸 DD-7th"},
+            {"id": "5-base",   "label": "🔸 5-base"},
+            {"id": "10-pound", "label": "🔸 10-pound"},
         ],
     },
 ]
@@ -118,7 +122,6 @@ RULES_TEXT = (
     "<b>BY PURCHASING YOU AGREE TO THESE RULES. FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. WE SHALL GIVE NO WARNINGS.</b>"
 )
 
-
 # ---- Refund Policy shown on every /start ----
 # This is displayed as the FIRST message every time a user sends /start.
 # Edit the text between the quotes. Keep \n for line breaks, \n\n for blank lines.
@@ -144,7 +147,6 @@ REFUND_RULES_TEXT = (
     "🔹 Payment: <b>BTC ONLY</b>\n\n"
     "<b>BY PURCHASING YOU AGREE TO THESE RULES. FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. WE SHALL GIVE NO WARNINGS.</b>"
 )
-
 
 # ---- Renameable labels (auto-built — do not edit) ----
 def _build_renameable() -> dict[str, str]:
