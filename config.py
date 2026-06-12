@@ -74,7 +74,7 @@ CATEGORIES = [
             {"id": "dd-4th",   "label": "🔸 10-pound"},
             {"id": "dd-7th",   "label": "🔸 DVLA-28th_may"},
             {"id": "5-base",   "label": "🔸 DVLA-12th_jun"},
-            {"id": "10-pound", "label": "🔸 Tomr-Fresh-Base"},
+
         ],
     },
 ]
