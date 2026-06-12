@@ -9,7 +9,13 @@ Telegram Store Bot
 import logging
 from decimal import Decimal
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardRemove,
+    BotCommand,
+)
 from telegram.error import BadRequest
 from telegram.ext import (
     Application,
@@ -223,7 +229,7 @@ async def safe_edit(query, text, reply_markup) -> None:
 
 
 # ============================================================
-#  /start
+#  /start and user commands
 # ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = update.effective_user.id
@@ -231,11 +237,61 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await db.is_banned(uid):
         await update.message.reply_text(
             "\U0001F6AB You have been banned from this store.\n"
-            f"Contact {config.SUPPORT_HANDLE} if you think this is a mistake."
+            f"Contact {config.SUPPORT_HANDLE} if you think this is a mistake.",
+            reply_markup=ReplyKeyboardRemove(),
         )
         return
+    # ReplyKeyboardRemove clears any old keyboard sitting at the bottom of the chat
     await update.message.reply_text(
-        welcome_text(), reply_markup=main_menu(), parse_mode="HTML"
+        welcome_text(),
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="HTML",
+    )
+    await update.message.reply_text(
+        "Use the buttons below 👇",
+        reply_markup=main_menu(),
+    )
+
+
+async def cmd_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await db.ensure_user(update.effective_user.id)
+    await update.message.reply_text(
+        "\U0001F6D2 <b>Store</b>\n\nChoose a category:",
+        reply_markup=store_menu(),
+        parse_mode="HTML",
+    )
+
+
+async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid = update.effective_user.id
+    await db.ensure_user(uid)
+    bal = await db.get_balance(uid)
+    bal_str = f"{config.CURRENCY_SYMBOL}{bal:.2f}"
+    await update.message.reply_text(
+        f"\U0001F4B5 <b>Wallet</b>\n\nYour balance: <b>{bal_str}</b>",
+        reply_markup=wallet_menu(bal_str),
+        parse_mode="HTML",
+    )
+
+
+async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        config.RULES_TEXT,
+        reply_markup=back_menu(),
+        parse_mode="HTML",
+    )
+
+
+async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        f"\u260E\uFE0F <b>Support</b>\n\nContact us: {config.SUPPORT_HANDLE}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "\u260E\uFE0F Open Support Chat",
+                url=_tg_url(config.SUPPORT_URL),
+            )
+        ]]),
+        parse_mode="HTML",
     )
 
 
@@ -249,10 +305,24 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     awaiting = context.user_data.get("awaiting")
     if awaiting == "topup_amount":
         await handle_topup_amount(update, context)
+        return
     elif awaiting == "proof":
         await handle_proof_text(update, context)
+        return
     elif awaiting == "bin_search":
         await handle_bin_search(update, context)
+        return
+
+    # Handle reply-keyboard shortcuts (text sent by bottom keyboard buttons)
+    txt = update.message.text.strip().lower()
+    if txt in ("store", "🛒 store"):
+        await cmd_store(update, context)
+    elif txt in ("wallet", "💵 wallet"):
+        await cmd_wallet(update, context)
+    elif txt in ("rules", "🛡️ rules"):
+        await cmd_rules(update, context)
+    elif txt in ("support", "☎️ support"):
+        await cmd_support(update, context)
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -704,6 +774,14 @@ async def _notify_admins_new_payment(bot, pay: dict) -> None:
 # ============================================================
 async def on_startup(app: Application) -> None:
     await db.init()
+    # Register commands so they show in the Telegram "/" menu
+    await app.bot.set_my_commands([
+        BotCommand("start",   "🏠 Main menu"),
+        BotCommand("store",   "🛒 Browse the store"),
+        BotCommand("wallet",  "💵 View wallet & top up"),
+        BotCommand("rules",   "🛡️ Read the rules"),
+        BotCommand("support", "☎️ Contact support"),
+    ])
     logger.info("Startup complete. Bot is running.")
 
 
@@ -722,7 +800,11 @@ def main() -> None:
 
     admin.register_admin_handlers(app)
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start",   start))
+    app.add_handler(CommandHandler("store",   cmd_store))
+    app.add_handler(CommandHandler("wallet",  cmd_wallet))
+    app.add_handler(CommandHandler("rules",   cmd_rules))
+    app.add_handler(CommandHandler("support", cmd_support))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.PHOTO & filters.UpdateType.MESSAGE, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
