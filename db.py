@@ -369,6 +369,16 @@ async def remove_stock_item(item_id: str) -> bool:
         return result == "DELETE 1"
 
 
+async def set_sublist_price(subl_id: str, price: Decimal) -> int:
+    """Update price of all unsold items in a sublist. Returns count updated."""
+    async with _pool.acquire() as con:
+        result = await con.execute(
+            "UPDATE stock SET price=$2 WHERE subl_id=$1 AND sold=FALSE",
+            subl_id, price,
+        )
+        return int(result.split()[-1])
+
+
 async def get_stock_item(item_id: str) -> dict | None:
     async with _pool.acquire() as con:
         row = await con.fetchrow(
