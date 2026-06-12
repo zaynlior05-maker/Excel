@@ -68,13 +68,13 @@ REVIEW_TIME = os.environ.get("REVIEW_TIME", "within 30 minutes")
 CATEGORIES = [
     {
         "id": "ff",
-        "label": "🗓️ FF",
+        "label": "🗓️ Fullz",
         "sublists": [
-            {"id": "dd-28th",  "label": "🔸 DD-28th"},
-            {"id": "dd-4th",   "label": "🔸 DD-4th"},
-            {"id": "dd-7th",   "label": "🔸 DD-7th"},
-            {"id": "5-base",   "label": "🔸 5-base"},
-            {"id": "10-pound", "label": "🔸 10-pound"},
+            {"id": "dd-28th",  "label": "🔸 5-base"},
+            {"id": "dd-4th",   "label": "🔸 10-pound"},
+            {"id": "dd-7th",   "label": "🔸 DVLA-28th_may"},
+            {"id": "5-base",   "label": "🔸 DVLA-12th_jun"},
+            {"id": "10-pound", "label": "🔸 Tomr-Fresh-Base"},
         ],
     },
 ]
