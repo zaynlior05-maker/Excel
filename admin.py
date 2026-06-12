@@ -148,6 +148,9 @@ def stock_list_kb(subl_id: str, items: list) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(
         "📤 Upload File", callback_data=f"adm_upload_prompt:{subl_id}"
     )])
+    rows.append([InlineKeyboardButton(
+        "💰 Change Price (All Items)", callback_data=f"adm_setprice:{subl_id}"
+    )])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm_stock")])
     return InlineKeyboardMarkup(rows)
 
@@ -469,11 +472,27 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                                show_alert=True)
             return
         await query.delete_message()
-        # Create a fresh message to show progress and report on.
         fresh = await context.bot.send_message(
             query.from_user.id, "⏳ Processing…"
         )
         await _run_upload(fresh, subl_id, file_id, context)
+
+    elif data.startswith("adm_setprice:"):
+        subl_id = data.split(":", 1)[1]
+        label   = _subl_label(subl_id)
+        items   = await db.get_stock(subl_id)
+        context.user_data["adm_awaiting"]      = "set_price"
+        context.user_data["adm_price_subl"]    = subl_id
+        await _safe_edit(
+            query,
+            f"💰 <b>Change Price — {label}</b>\n\n"
+            f"Currently <b>{len(items)}</b> unsold item(s) in this list.\n\n"
+            f"Send the new price (number only, e.g. <code>8</code> for {config.CURRENCY_SYMBOL}8):\n\n"
+            "<i>This updates every unsold item in this list at once.</i>",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data=f"adm_slist:{subl_id}")
+            ]]),
+        )
 
     # ---- Users ----
     elif data == "adm_users":
@@ -722,6 +741,8 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _handle_broadcast_compose(update, context)
     elif awaiting == "label_edit":
         await _handle_label_edit(update, context)
+    elif awaiting == "set_price":
+        await _handle_set_price(update, context)
     elif awaiting == "upload_file":
         # File expected — remind admin to send the actual file
         await update.message.reply_text(
@@ -809,7 +830,31 @@ async def _handle_bal_delta(update, context) -> None:
     )
 
 
-async def _handle_broadcast_compose(update, context) -> None:
+async def _handle_set_price(update, context) -> None:
+    subl_id = context.user_data.pop("adm_price_subl", "")
+    context.user_data["adm_awaiting"] = None
+    raw = update.message.text.strip().lstrip(config.CURRENCY_SYMBOL)
+    try:
+        price = Decimal(raw)
+        if price <= 0:
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        await update.message.reply_text(
+            "⚠️ Please send a positive number, e.g. <code>8</code>",
+            parse_mode="HTML",
+        )
+        return
+    count   = await db.set_sublist_price(subl_id, price)
+    label   = _subl_label(subl_id)
+    items   = await db.get_stock(subl_id)
+    await update.message.reply_text(
+        f"✅ <b>Price Updated — {label}</b>\n\n"
+        f"New price: <b>{config.CURRENCY_SYMBOL}{price:g}</b>\n"
+        f"Items updated: <b>{count}</b>\n"
+        f"Total in stock: {len(items)}",
+        reply_markup=stock_list_kb(subl_id, items),
+        parse_mode="HTML",
+    )
     context.user_data["adm_awaiting"] = None
     msg     = update.message.text.strip()
     msg_key = f"bc_{update.message.message_id}"
@@ -860,7 +905,45 @@ async def _handle_label_edit(update, context) -> None:
 #  /rename quick command
 # ============================================================
 @admin_only
-async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Usage: /price LIST_ID NEW_PRICE  e.g. /price dd-28th 8"""
+    args = context.args or []
+    if len(args) < 2:
+        valid = "\n".join(
+            f"  <code>{s['id']}</code>  {s['label']}"
+            for cat in config.CATEGORIES
+            for s in cat.get("sublists", [])
+        )
+        await update.message.reply_text(
+            "Usage: <code>/price LIST_ID NEW_PRICE</code>\n\n"
+            "Example: <code>/price dd-28th 8</code>\n\n"
+            "Valid list IDs:\n" + valid,
+            parse_mode="HTML",
+        )
+        return
+    subl_id = args[0].lower()
+    valid_ids = [s["id"] for cat in config.CATEGORIES for s in cat.get("sublists", [])]
+    if subl_id not in valid_ids:
+        await update.message.reply_text(
+            f"❌ Unknown list: <code>{subl_id}</code>\n"
+            "Valid IDs: " + ", ".join(f"<code>{i}</code>" for i in valid_ids),
+            parse_mode="HTML",
+        )
+        return
+    try:
+        price = Decimal(args[1].lstrip(config.CURRENCY_SYMBOL))
+        if price <= 0:
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        await update.message.reply_text("Please provide a valid price, e.g. <code>8</code>", parse_mode="HTML")
+        return
+    count = await db.set_sublist_price(subl_id, price)
+    label = _subl_label(subl_id)
+    await update.message.reply_text(
+        f"✅ <b>{label}</b> — price updated to <b>{config.CURRENCY_SYMBOL}{price:g}</b>\n"
+        f"Items updated: <b>{count}</b>",
+        parse_mode="HTML",
+    )
     """
     Usage:  /rename KEY New display name
     Examples:
@@ -1232,6 +1315,7 @@ def register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("upload",    cmd_upload))
     app.add_handler(CommandHandler("rename",    cmd_rename))
+    app.add_handler(CommandHandler("price",     cmd_price))
 
     # All adm_ callbacks — must run BEFORE the general on_button handler
     app.add_handler(CallbackQueryHandler(
