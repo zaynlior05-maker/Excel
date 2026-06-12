@@ -1192,6 +1192,61 @@ async def _run_upload(message, subl_id: str, file_id: str, context) -> None:
 #  /upload command
 # ============================================================
 @admin_only
+@admin_only
+async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Usage:  /rename KEY New display name
+    Examples:
+      /rename subl:dd-28th 🔸 28th Base
+      /rename cat:ff 🗓️ Fresh Files
+      /rename menu:store 🏪 Shop
+    Run /rename with no arguments to see all valid keys.
+    """
+    args = context.args or []
+
+    if not args:
+        lines = ["🏷️ <b>Renameable Labels</b>\n",
+                 "Usage: <code>/rename KEY New Name</code>\n"]
+        for key, default in config.RENAMEABLE.items():
+            current = db.get_label(key, default)
+            changed = " 🔄" if current != default else ""
+            lines.append(f"<code>{key}</code>{changed}\n  → {current}")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        return
+
+    key       = args[0].lower()
+    new_value = " ".join(args[1:]).strip()
+
+    if key not in config.RENAMEABLE:
+        valid = "\n".join(f"  <code>{k}</code>" for k in config.RENAMEABLE)
+        await update.message.reply_text(
+            f"❌ Unknown key: <code>{key}</code>\n\nValid keys:\n{valid}",
+            parse_mode="HTML",
+        )
+        return
+
+    if not new_value:
+        await update.message.reply_text(
+            f"Please provide the new name.\nExample: <code>/rename {key} 🔸 New Name</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    if len(new_value) > 64:
+        await update.message.reply_text("Name too long (max 64 characters).")
+        return
+
+    old_value = db.get_label(key, config.default_label(key))
+    await db.set_label(key, new_value)
+    await update.message.reply_text(
+        f"✅ Renamed <code>{key}</code>\n"
+        f"  Before: <i>{old_value}</i>\n"
+        f"  After:  <b>{new_value}</b>\n\n"
+        "Live immediately — no restart needed.",
+        parse_mode="HTML",
+    )
+
+
 async def cmd_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Usage: /upload SUBL_ID  — bot will then wait for a file."""
     parts = context.args or []
