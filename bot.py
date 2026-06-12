@@ -27,6 +27,7 @@ from telegram.ext import (
 )
 
 import admin
+import channel_log
 import config
 import db
 import payments
@@ -232,8 +233,12 @@ async def safe_edit(query, text, reply_markup) -> None:
 #  /start and user commands
 # ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid = update.effective_user.id
+    uid      = update.effective_user.id
+    username = update.effective_user.username or ""
+    existing = await db.get_user_info(uid)
+    is_new   = existing is None
     await db.ensure_user(uid)
+    await channel_log.user_start(uid, username, is_new)
     if await db.is_banned(uid):
         await update.message.reply_text(
             "\U0001F6AB You have been banned from this store.\n"
@@ -241,7 +246,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=ReplyKeyboardRemove(),
         )
         return
-    # ReplyKeyboardRemove clears any old keyboard sitting at the bottom of the chat
     await update.message.reply_text(
         welcome_text(),
         reply_markup=ReplyKeyboardRemove(),
@@ -313,16 +317,29 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await handle_bin_search(update, context)
         return
 
-    # Handle reply-keyboard shortcuts (text sent by bottom keyboard buttons)
-    txt = update.message.text.strip().lower()
-    if txt in ("store", "🛒 store"):
+    # Handle reply-keyboard shortcuts — strip emojis and match loosely
+    import re
+    clean = re.sub(r'[^\w\s]', '', txt).strip().lower()
+    if "store" in clean:
         await cmd_store(update, context)
-    elif txt in ("wallet", "💵 wallet"):
+    elif "wallet" in clean:
         await cmd_wallet(update, context)
-    elif txt in ("rules", "🛡️ rules"):
+    elif "rules" in clean:
         await cmd_rules(update, context)
-    elif txt in ("support", "☎️ support"):
+    elif "support" in clean:
         await cmd_support(update, context)
+    elif "channel" in clean or "update" in clean:
+        await context.bot.send_message(
+            update.effective_user.id,
+            f"\U0001F4E2 <b>Updates Channel</b>\n\nJoin us here:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "\U0001F4E2 Open Channel",
+                    url=_tg_url(config.CHANNEL_URL),
+                )
+            ]]),
+            parse_mode="HTML",
+        )
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -372,6 +389,8 @@ async def handle_bin_search(update, context) -> None:
         for it in await db.get_stock(subl["id"]):
             if it["bin"] == bin_digits:
                 matches.append((subl["id"], it))
+
+    await channel_log.bin_search(update.effective_user.id, bin_digits, len(matches))
 
     if not matches:
         await update.message.reply_text(
@@ -498,10 +517,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 callback_data="topup",
             )]
         )
+        await channel_log.item_viewed(
+            uid, item["bin"], item["year"], item["code"],
+            float(item["price"]), subl_id,
+        )
         await safe_edit(
-            query,
-            f"<b>{format_line(item)}</b>\n\n"
-            f"BIN:          <code>{item['bin']}</code>\n"
             f"Year:         {item['year']}\n"
             f"Code/Region:  {item['code']}\n"
             f"Price:        <b>{config.CURRENCY_SYMBOL}{price_str}</b>\n"
@@ -555,6 +575,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:  # success
             new_bal = result["new_balance"]
             content = result["content"]
+            await channel_log.purchase_made(
+                uid, item["bin"] if item else "?",
+                item["year"] if item else "?",
+                item["code"] if item else "?",
+                float(result["price"]), float(new_bal), subl_id,
+            )
             await safe_edit(
                 query,
                 f"✅ <b>Purchase Successful!</b>\n\n"
@@ -660,7 +686,8 @@ async def show_payment_address(query, context, user_id, amount, coin) -> None:
     payment_id = payments.new_payment_id()
     await db.ensure_user(user_id)
     await db.record_payment(payment_id, user_id, Decimal(str(amount)), coin)
-    context.user_data["topup_amount"]  = None  # clear so it can't be reused
+    context.user_data["topup_amount"] = None
+    await channel_log.topup_started(user_id, amount, coin)
 
     # Fetch live exchange rate
     rates    = await payments.get_rates_gbp()
@@ -705,6 +732,11 @@ async def handle_proof_text(update, context) -> None:
         parse_mode="HTML",
     )
     pay = await db.get_payment(payment_id)
+    if pay:
+        await channel_log.proof_submitted(
+            update.effective_user.id, float(pay["amount"]),
+            pay["coin"], f"txid:{tx_ref}", payment_id,
+        )
     await _notify_admins_new_payment(context.bot, pay)
 
 
@@ -733,6 +765,11 @@ async def handle_proof_photo(update, context) -> None:
         parse_mode="HTML",
     )
     pay = await db.get_payment(payment_id)
+    if pay:
+        await channel_log.proof_submitted(
+            update.effective_user.id, float(pay["amount"]),
+            pay["coin"], tx_ref, payment_id,
+        )
     await _notify_admins_new_payment(context.bot, pay)
 
 
@@ -774,7 +811,7 @@ async def _notify_admins_new_payment(bot, pay: dict) -> None:
 # ============================================================
 async def on_startup(app: Application) -> None:
     await db.init()
-    # Register commands so they show in the Telegram "/" menu
+    channel_log.init(app.bot)
     await app.bot.set_my_commands([
         BotCommand("start",   "🏠 Main menu"),
         BotCommand("store",   "🛒 Browse the store"),
