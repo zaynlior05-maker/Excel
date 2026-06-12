@@ -25,7 +25,10 @@ CHANNEL_URL    = os.environ.get("CHANNEL_URL",    "https://t.me/YourChannel")
 CURRENCY_SYMBOL = os.environ.get("CURRENCY_SYMBOL", "£")
 
 # ---- Top-up preset buttons ----
-TOPUP_PRESETS = [5, 10, 25, 50]
+TOPUP_PRESETS = [50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 750, 1000]
+
+# Minimum top-up amount
+TOPUP_MIN = 50
 
 # ---- Items per page in store lists ----
 ITEMS_PER_PAGE = 8
