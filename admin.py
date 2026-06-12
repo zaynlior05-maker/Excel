@@ -109,10 +109,13 @@ def admin_home_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📋 Orders",   callback_data="adm_orders"),
         ],
         [
+            InlineKeyboardButton("💰 Prices",   callback_data="adm_prices"),
             InlineKeyboardButton("💳 Payments", callback_data="adm_payments"),
-            InlineKeyboardButton("🏷️ Labels",   callback_data="adm_labels"),
         ],
-        [InlineKeyboardButton("📢 Broadcast",   callback_data="adm_broadcast")],
+        [
+            InlineKeyboardButton("🏷️ Labels",   callback_data="adm_labels"),
+            InlineKeyboardButton("📢 Broadcast", callback_data="adm_broadcast"),
+        ],
         [InlineKeyboardButton("❌ Close",        callback_data="adm_close")],
     ])
 
@@ -563,6 +566,32 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 f"<i>{o['created_at'].strftime('%d/%m %H:%M')}</i>"
             )
         await _safe_edit(query, "\n".join(lines), back_to_admin())
+
+    # ---- Prices ----
+    elif data == "adm_prices":
+        rows = []
+        counts = await db.get_stock_counts()
+        for cat in config.CATEGORIES:
+            for subl in cat.get("sublists", []):
+                sid     = subl["id"]
+                label   = db.get_label(f"subl:{sid}", subl["label"])
+                items   = await db.get_stock(sid)
+                # Get current price from first available item
+                price_str = f"{config.CURRENCY_SYMBOL}{float(items[0]['price']):g}" \
+                            if items else "no stock"
+                count = counts.get(sid, 0)
+                rows.append([InlineKeyboardButton(
+                    f"{label}  ·  {price_str}  ·  {count} items",
+                    callback_data=f"adm_setprice:{sid}",
+                )])
+        rows.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_menu")])
+        await _safe_edit(
+            query,
+            "💰 <b>Price Manager</b>\n\n"
+            "Tap any list to change its price.\n"
+            "<i>Shows current price · items in stock</i>",
+            InlineKeyboardMarkup(rows),
+        )
 
     # ---- Payments ----
     elif data == "adm_payments":
