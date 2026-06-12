@@ -78,7 +78,7 @@ CATEGORIES = [
             {"id": "dd-4th",   "label": "🔸 DD-4th"},
             {"id": "dd-7th",   "label": "🔸 DD-7th"},
             {"id": "5-base",   "label": "🔸 5-base"},
-            {"id": "10-pound", "label": "🔸 10-pound"},
+
         ],
     },
 ]
