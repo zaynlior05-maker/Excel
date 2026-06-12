@@ -49,7 +49,10 @@ from telegram.ext import (
 )
 
 import config
-import channel_log
+try:
+    import channel_log
+except ImportError:
+    channel_log = None  # log channel not set up yet — safe to continue
 import db
 
 logger = logging.getLogger(__name__)
@@ -409,14 +412,14 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     elif data.startswith("adm_ban:"):
         target = int(data.split(":", 1)[1])
         await db.set_banned(target, True)
-        await channel_log.user_banned(target, query.from_user.id, True)
+        channel_log and await channel_log.user_banned(target, query.from_user.id, True)
         await query.answer("🚫 User banned.", show_alert=True)
         await _refresh_user(query, target)
 
     elif data.startswith("adm_unban:"):
         target = int(data.split(":", 1)[1])
         await db.set_banned(target, False)
-        await channel_log.user_banned(target, query.from_user.id, False)
+        channel_log and await channel_log.user_banned(target, query.from_user.id, False)
         await query.answer("✅ User unbanned.", show_alert=True)
         await _refresh_user(query, target)
 
@@ -503,7 +506,7 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         uid, amt = result["user_id"], result["amount"]
         bal = await db.get_balance(uid)
-        await channel_log.payment_approved(uid, float(amt), float(bal), query.from_user.id)
+        channel_log and await channel_log.payment_approved(uid, float(amt), float(bal), query.from_user.id)
         await query.answer(f"✅ Approved! {config.CURRENCY_SYMBOL}{amt:.2f} credited.", show_alert=True)
         # Notify the user
         try:
@@ -531,7 +534,7 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await query.answer("Already handled or not found.", show_alert=True)
             return
         uid = result["user_id"]
-        await channel_log.payment_rejected(uid, float(result["amount"]), query.from_user.id)
+        channel_log and await channel_log.payment_rejected(uid, float(result["amount"]), query.from_user.id)
         await query.answer("❌ Rejected.", show_alert=True)
         try:
             await context.bot.send_message(
@@ -720,7 +723,7 @@ async def _handle_bal_delta(update, context) -> None:
         return
     delta   = amount if sign == "+" else -amount
     new_bal = await db.adjust_balance(uid, delta)
-    await channel_log.balance_adjusted(uid, update.effective_user.id, float(delta), float(new_bal))
+    channel_log and await channel_log.balance_adjusted(uid, update.effective_user.id, float(delta), float(new_bal))
     verb    = "added to" if sign == "+" else "deducted from"
     await update.message.reply_text(
         f"✅ {config.CURRENCY_SYMBOL}{amount:g} {verb} user {uid}.\n"
@@ -1137,7 +1140,7 @@ async def _do_broadcast(reply_fn, bot, msg: str) -> None:
     await reply_fn(
         f"📢 Broadcast complete.\n✅ Sent: {ok}   ❌ Failed: {fail}",
     )
-    await channel_log.broadcast_sent(0, ok, fail)  # admin_id not available here
+    channel_log and await channel_log.broadcast_sent(0, ok, fail)  # admin_id not available here
 
 
 # ============================================================
