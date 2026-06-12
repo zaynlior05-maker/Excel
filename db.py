@@ -33,6 +33,7 @@ async def init() -> None:
         await con.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id    BIGINT PRIMARY KEY,
+                username   TEXT NOT NULL DEFAULT '',
                 balance    NUMERIC(18,2) NOT NULL DEFAULT 0,
                 banned     BOOLEAN NOT NULL DEFAULT FALSE,
                 joined_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -74,6 +75,11 @@ async def init() -> None:
         """)
     await _seed_stock()
     await _load_label_cache()
+    # Add username column if this is an existing database that predates it
+    async with _pool.acquire() as con:
+        await con.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT NOT NULL DEFAULT ''"
+        )
 
 
 # ============================================================
@@ -143,11 +149,13 @@ async def _seed_stock() -> None:
 # ============================================================
 #  Users
 # ============================================================
-async def ensure_user(user_id: int) -> None:
+async def ensure_user(user_id: int, username: str = "") -> None:
+    """Create user if new, always update username so it stays current."""
     async with _pool.acquire() as con:
         await con.execute(
-            "INSERT INTO users(user_id) VALUES($1) ON CONFLICT DO NOTHING",
-            user_id,
+            "INSERT INTO users(user_id, username) VALUES($1, $2) "
+            "ON CONFLICT(user_id) DO UPDATE SET username = EXCLUDED.username",
+            user_id, username or "",
         )
 
 
@@ -173,7 +181,7 @@ async def set_banned(user_id: int, banned: bool) -> None:
 async def get_user_info(user_id: int) -> dict | None:
     async with _pool.acquire() as con:
         row = await con.fetchrow(
-            "SELECT user_id, balance, banned, joined_at FROM users WHERE user_id=$1",
+            "SELECT user_id, username, balance, banned, joined_at FROM users WHERE user_id=$1",
             user_id,
         )
         if not row:
@@ -186,6 +194,7 @@ async def get_user_info(user_id: int) -> dict | None:
         )
         return {
             "user_id":  row["user_id"],
+            "username": row["username"] or "",
             "balance":  row["balance"],
             "banned":   row["banned"],
             "joined":   row["joined_at"],
