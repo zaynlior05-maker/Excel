@@ -16,6 +16,13 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")   # auto-set by Railway Postgr
 _raw_ids = os.environ.get("ADMIN_IDS", "")
 ADMIN_IDS: set[int] = {int(x.strip()) for x in _raw_ids.split(",") if x.strip().isdigit()}
 
+# ---- Log channel ----
+# Every bot event is sent here.
+# Steps: create a Telegram channel → add your bot as Admin → set this to
+# the channel's @username or numeric ID (e.g. -1001234567890).
+# Leave blank to disable.
+LOG_CHANNEL_ID = os.environ.get("LOG_CHANNEL_ID", "")
+
 # ---- Public-facing links ----
 SUPPORT_HANDLE = os.environ.get("SUPPORT_HANDLE", "@YourSupportHandle")
 SUPPORT_URL    = os.environ.get("SUPPORT_URL",    "https://t.me/YourSupportHandle")
@@ -90,14 +97,27 @@ ITEMS = {
 
 # ---- Rules ----
 RULES_TEXT = (
-    "🛡️ <b>STORE RULES</b>\n\n"
-    "1. All sales are final unless a replacement is agreed in advance.\n"
-    "2. Refunds / replacements are only valid if you followed these rules.\n"
-    "3. Do not share, resell, or redistribute purchased items.\n"
-    "4. Be respectful to support staff.\n"
-    "5. By purchasing you confirm you have read and accepted these rules.\n\n"
-    "<i>Edit this text in config.py (RULES_TEXT).</i>"
+    "🛡️ <b>STORE RULES & REFUND POLICY</b>\n\n"
+    "⚠️ <b>IF YOU FAIL TO FOLLOW OUR CLEAR INSTRUCTED RULES YOU WILL NOT BE REFUNDED.</b>\n\n"
+    "ℹ️ <b>How to Apply for a Refund:</b>\n"
+    "1. Check card on pay.google.com\n"
+    "2. If the card is dead, click refund at the bottom of purchased card.\n"
+    "3. Send the bot a Screenshot/Photo that proves the card is dead.\n"
+    "4. When checking card on pay.google.com, you have an automatic 3 minute timer.\n"
+    "5. Failing to check card / provide proof of card being dead past the 3 minute timer can result in no refund.\n"
+    "6. When providing a photo or a screenshot, please make sure: Card Number, Expiry Date and CVV are fully visible.\n"
+    "7. If number doesn't call or is invalid this doesn't qualify for refund unless all info is missing or fake.\n"
+    "8. If all the details are valid and the card is dead your account will be credited again with a refund within 5 minutes.\n\n"
+    "💡 <b>Keep in Mind:</b>\n"
+    "• <b>£10 & £5 BASES ARE NOT REFUNDABLE</b>\n"
+    "• <b>HSBC CARDS ARE NOT REFUNDABLE</b> (Or ANY company under them such as John Lewis, M&S, First Direct, etc.)\n\n"
+    "⛔️ <b>NOTE</b> ⛔️\n"
+    "🔹 Support account is available 24/7 @EXCELV3.\n"
+    "🔹 1 Transaction per wallet unless payment is underpaid. Our wallet always changes after each completed deposit.\n"
+    "🔹 Payment: <b>BTC ONLY</b>\n\n"
+    "<b>BY PURCHASING YOU AGREE TO THESE RULES. FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. WE SHALL GIVE NO WARNINGS.</b>"
 )
+
 
 # ---- Renameable labels (auto-built — do not edit) ----
 def _build_renameable() -> dict[str, str]:
