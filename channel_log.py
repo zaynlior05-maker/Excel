@@ -50,7 +50,16 @@ async def log(text: str) -> None:
 #  Shorthand event helpers
 # ──────────────────────────────────────────
 
-async def user_start(user_id: int, username: str, is_new: bool) -> None:
+async def nav_event(user_id: int, page: str, detail: str = "") -> None:
+    """Log any button tap / menu navigation."""
+    line = f"📍 <b>{page}</b>"
+    if detail:
+        line += f" — {detail}"
+    await log(
+        f"{line}\n"
+        f"User: <code>{user_id}</code>\n"
+        f"🕐 {_now()}"
+    )
     icon = "🆕" if is_new else "👋"
     tag  = f"@{username}" if username else "no username"
     await log(
