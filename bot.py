@@ -29,15 +29,17 @@ from telegram.ext import (
 import admin
 
 class _NullLog:
-    """Silent fallback — used when channel_log.py is missing or outdated."""
+    """Silent fallback used ONLY when channel_log.py cannot be imported at all."""
     def __getattr__(self, _):
         async def _noop(*a, **kw): pass
         return _noop
+    def init(self, bot): pass
 
 try:
-    import channel_log as _cl
-    # If the file is an old version missing key functions, use the null fallback
-    channel_log = _cl if hasattr(_cl, 'user_start') else _NullLog()
+    import channel_log
+    # Ensure the module has an init function (older versions may not)
+    if not hasattr(channel_log, 'init'):
+        channel_log.init = lambda bot: None
 except ImportError:
     channel_log = _NullLog()
 
