@@ -118,17 +118,21 @@ def find_category(cat_id):
     return next((c for c in config.CATEGORIES if c["id"] == cat_id), None)
 
 
-def find_sublist(cat, subl_id):
-    if not cat:
-        return None
-    return next((s for s in cat.get("sublists", []) if s["id"] == subl_id), None)
+def find_sublist(cat, subl_id: str) -> dict | None:
+    """Find sublist from DB cache (works even if cat is None)."""
+    if cat is None:
+        return db.find_sublist_by_id(subl_id)
+    for s in db.get_sublists(cat["id"]):
+        if s["id"] == subl_id:
+            return s
+    return None
 
 
 def sublist_menu(cat) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(
                 db.get_label(f"subl:{s['id']}", s["label"]),
                 callback_data=f"subl:{cat['id']}:{s['id']}")]
-            for s in cat.get("sublists", [])]
+            for s in db.get_sublists(cat["id"])]
     rows.append([InlineKeyboardButton("\U0001F50D Search for BIN",
                                       callback_data=f"binsearch:{cat['id']}")])
     rows.append([InlineKeyboardButton("\u2B05\uFE0F Back to Store", callback_data="store")])
