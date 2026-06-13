@@ -1,15 +1,17 @@
 """
-Log channel — sends every bot event to your private Telegram channel.
+Log channel — pushes every bot event to your private Telegram channel.
 
 Setup:
-  1. Create a Telegram channel (can be private)
-  2. Add your bot as an Admin to that channel
+  1. Create a Telegram channel (private is fine)
+  2. Add your bot as Admin in that channel
   3. Get the channel ID:
-       - Forward any message from it to @userinfobot  OR
-       - Use the channel username e.g.  @MyLogChannel
+       Forward any message from it to @userinfobot
+       OR use the @username directly
   4. Add LOG_CHANNEL_ID as a Railway Variable
        e.g.  LOG_CHANNEL_ID=-1001234567890
         or   LOG_CHANNEL_ID=@MyLogChannel
+
+Test: send /testlog to your bot to verify the connection.
 """
 
 import logging
@@ -26,6 +28,10 @@ logger = logging.getLogger(__name__)
 def init(bot: Bot) -> None:
     global _bot
     _bot = bot
+    if config.LOG_CHANNEL_ID:
+        logger.info("Log channel initialised → %s", config.LOG_CHANNEL_ID)
+    else:
+        logger.warning("LOG_CHANNEL_ID is not set — channel logging disabled.")
 
 
 def _now() -> str:
@@ -33,9 +39,12 @@ def _now() -> str:
 
 
 async def log(text: str) -> None:
-    """Send a message to the log channel. Silent on failure."""
-    if not _bot or not config.LOG_CHANNEL_ID:
+    """Send a message to the log channel. Logs errors visibly."""
+    if not _bot:
+        logger.warning("channel_log: bot not initialised (init() not called)")
         return
+    if not config.LOG_CHANNEL_ID:
+        return   # silently skip — user hasn't configured a log channel
     try:
         await _bot.send_message(
             config.LOG_CHANNEL_ID,
@@ -43,23 +52,14 @@ async def log(text: str) -> None:
             parse_mode="HTML",
         )
     except Exception as e:
-        logger.warning("Log channel error: %s", e)
+        logger.error("channel_log: failed to send to %s — %s", config.LOG_CHANNEL_ID, e)
 
 
 # ──────────────────────────────────────────
-#  Shorthand event helpers
+#  Event helpers
 # ──────────────────────────────────────────
 
-async def nav_event(user_id: int, page: str, detail: str = "") -> None:
-    """Log any button tap / menu navigation."""
-    line = f"📍 <b>{page}</b>"
-    if detail:
-        line += f" — {detail}"
-    await log(
-        f"{line}\n"
-        f"User: <code>{user_id}</code>\n"
-        f"🕐 {_now()}"
-    )
+async def user_start(user_id: int, username: str, is_new: bool) -> None:
     icon = "🆕" if is_new else "👋"
     tag  = f"@{username}" if username else "no username"
     await log(
@@ -69,14 +69,20 @@ async def nav_event(user_id: int, page: str, detail: str = "") -> None:
     )
 
 
-async def bin_search(user_id: int, bin_digits: str,
-                     found: int, subl_id: str = "") -> None:
+async def nav_event(user_id: int, page: str, detail: str = "") -> None:
+    line = f"📍 <b>{page}</b>"
+    if detail:
+        line += f" — {detail}"
+    await log(f"{line}\nUser: <code>{user_id}</code>\n🕐 {_now()}")
+
+
+async def bin_search(user_id: int, bin_digits: str, found: int, subl_id: str = "") -> None:
     icon   = "✅" if found else "❌"
     result = f"<b>{found} match(es)</b>" if found else "No stock found"
     await log(
         f"🔍 <b>BIN Search</b>\n"
-        f"User: <code>{user_id}</code>\n"
-        f"BIN:  <code>{bin_digits}</code>\n"
+        f"User:   <code>{user_id}</code>\n"
+        f"BIN:    <code>{bin_digits}</code>\n"
         f"Result: {icon} {result}\n"
         f"🕐 {_now()}"
     )
