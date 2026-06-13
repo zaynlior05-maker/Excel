@@ -536,6 +536,17 @@ async def handle_bin_search(update, context) -> None:
     )
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Unhandled exception:", exc_info=context.error)
+    try:
+        if update and hasattr(update, "callback_query") and update.callback_query:
+            await update.callback_query.answer("⚠️ Something went wrong. Please try again.")
+        elif update and hasattr(update, "message") and update.message:
+            await update.message.reply_text("⚠️ Something went wrong. Please try again.")
+    except Exception:
+        pass
+
+
 async def admin_relay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Ghost sender — admin sends any message/file to the bot,
