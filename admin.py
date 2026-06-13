@@ -274,21 +274,18 @@ def stock_overview_kb(counts: dict) -> InlineKeyboardMarkup:
 def stock_list_kb(subl_id: str, items: list) -> InlineKeyboardMarkup:
     rows = []
     for it in items[:20]:
-        label = f"❌ {it['bin']} - {it['year']} - {it['code']} - {config.CURRENCY_SYMBOL}{it['price']:g}"
-        rows.append([InlineKeyboardButton(label, callback_data=f"adm_sdel:{it['id']}")])
-    rows.append([InlineKeyboardButton(
-        "➕ Add Item", callback_data=f"adm_sadd:{subl_id}"
-    )])
-    rows.append([InlineKeyboardButton(
-        "📤 Upload File", callback_data=f"adm_upload_prompt:{subl_id}"
-    )])
-    rows.append([InlineKeyboardButton(
-        "💰 Change Price (All Items)", callback_data=f"adm_setprice:{subl_id}"
-    )])
-    rows.append([InlineKeyboardButton(
-        "🗑️ Delete This Base", callback_data=f"adm_delbase_confirm:{subl_id}"
-    )])
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm_stock")])
+        label = f"{it['bin']} - {it['year']} - {it['code']} - {config.CURRENCY_SYMBOL}{float(it['price']):g}"
+        rows.append([
+            InlineKeyboardButton(f"❌ {label}", callback_data=f"adm_sdel:{it['id']}"),
+        ])
+        rows.append([
+            InlineKeyboardButton(f"✏️ £ Set Price", callback_data=f"adm_itemprice:{it['id']}:{subl_id}"),
+        ])
+    rows.append([InlineKeyboardButton("➕ Add Item",              callback_data=f"adm_sadd:{subl_id}")])
+    rows.append([InlineKeyboardButton("📤 Upload File",           callback_data=f"adm_upload_prompt:{subl_id}")])
+    rows.append([InlineKeyboardButton("💰 Change Price (All Items)", callback_data=f"adm_setprice:{subl_id}")])
+    rows.append([InlineKeyboardButton("🗑️ Delete This Base",     callback_data=f"adm_delbase_confirm:{subl_id}")])
+    rows.append([InlineKeyboardButton("⬅️ Back",                  callback_data="adm_stock")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -605,6 +602,25 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         await _safe_edit(query, text, stock_list_kb(subl_id, items))
 
+    elif data.startswith("adm_itemprice:"):
+        _, item_id, subl_id = data.split(":", 2)
+        item  = await db.get_stock_item(item_id)
+        if not item:
+            await query.answer("Item not found.", show_alert=True)
+            return
+        context.user_data["adm_awaiting"]        = "item_price"
+        context.user_data["adm_item_price_id"]   = item_id
+        context.user_data["adm_item_price_subl"] = subl_id
+        label = f"{item['bin']} - {item['year']} - {item['code']}"
+        await _safe_edit(query,
+            f"✏️ <b>Set Individual Price</b>\n\n"
+            f"Item: <code>{label}</code>\n"
+            f"Current price: <b>{config.CURRENCY_SYMBOL}{float(item['price']):g}</b>\n\n"
+            "Send the new price:",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data=f"adm_slist:{subl_id}")
+            ]]))
+
     elif data.startswith("adm_sdel:"):
         item_id = data.split(":", 1)[1]
         item = await db.get_stock_item(item_id)
@@ -768,29 +784,78 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # ---- Prices ----
     elif data == "adm_prices":
+        await _safe_edit(query,
+            "💰 <b>Price Manager</b>\n\n"
+            "Choose how you want to change prices:",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "🌍 Global — change ALL items at once",
+                    callback_data="adm_price_global",
+                )],
+                [InlineKeyboardButton(
+                    "🔢 By BIN — all items with a specific BIN",
+                    callback_data="adm_price_bin",
+                )],
+                [InlineKeyboardButton(
+                    "📋 By Base — all items in one base",
+                    callback_data="adm_price_bybase",
+                )],
+                [InlineKeyboardButton(
+                    "🎯 Individual — one specific item",
+                    callback_data="adm_price_individual",
+                )],
+                [InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_menu")],
+            ]))
+
+    elif data == "adm_price_global":
+        context.user_data["adm_awaiting"] = "global_price"
+        counts = await db.get_stock_counts()
+        total  = sum(counts.values())
+        await _safe_edit(query,
+            f"🌍 <b>Global Price</b>\n\n"
+            f"This will update <b>{total}</b> unsold items across every base.\n\n"
+            "Send the new price (number only):",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="adm_prices")
+            ]]))
+
+    elif data == "adm_price_bin":
+        context.user_data["adm_awaiting"] = "bin_price_bin"
+        await _safe_edit(query,
+            "🔢 <b>Price by BIN</b>\n\n"
+            "Send the BIN number you want to reprice:\n"
+            "e.g. <code>492181</code>",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="adm_prices")
+            ]]))
+
+    elif data == "adm_price_bybase":
         rows = []
         counts = await db.get_stock_counts()
-        for cat in config.CATEGORIES:
-            for subl in cat.get("sublists", []):
-                sid     = subl["id"]
-                label   = db.get_label(f"subl:{sid}", subl["label"])
-                items   = await db.get_stock(sid)
-                # Get current price from first available item
-                price_str = f"{config.CURRENCY_SYMBOL}{float(items[0]['price']):g}" \
-                            if items else "no stock"
-                count = counts.get(sid, 0)
-                rows.append([InlineKeyboardButton(
-                    f"{label}  ·  {price_str}  ·  {count} items",
-                    callback_data=f"adm_setprice:{sid}",
-                )])
-        rows.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_menu")])
-        await _safe_edit(
-            query,
-            "💰 <b>Price Manager</b>\n\n"
-            "Tap any list to change its price.\n"
-            "<i>Shows current price · items in stock</i>",
-            InlineKeyboardMarkup(rows),
-        )
+        for s in db.get_all_sublists():
+            cnt   = counts.get(s["id"], 0)
+            label = db.get_label(f"subl:{s['id']}", s["label"])
+            price_str = ""
+            items = await db.get_stock(s["id"])
+            if items:
+                price_str = f"  ·  {config.CURRENCY_SYMBOL}{float(items[0]['price']):g}"
+            rows.append([InlineKeyboardButton(
+                f"{label}{price_str}  ·  {cnt} items",
+                callback_data=f"adm_setprice:{s['id']}",
+            )])
+        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm_prices")])
+        await _safe_edit(query,
+            "📋 <b>Price by Base</b>\n\nTap a base to update its price:",
+            InlineKeyboardMarkup(rows))
+
+    elif data == "adm_price_individual":
+        context.user_data["adm_awaiting"] = "individual_price_search"
+        await _safe_edit(query,
+            "🎯 <b>Individual Item Price</b>\n\n"
+            "Send the BIN to find the item, then pick which one to reprice:",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="adm_prices")
+            ]]))
 
     # ---- Payments ----
     elif data == "adm_payments":
@@ -965,6 +1030,16 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _handle_add_base_id(update, context)
     elif awaiting == "add_base_label":
         await _handle_add_base_label(update, context)
+    elif awaiting == "global_price":
+        await _handle_global_price(update, context)
+    elif awaiting == "bin_price_bin":
+        await _handle_bin_price_bin(update, context)
+    elif awaiting == "bin_price_amount":
+        await _handle_bin_price_amount(update, context)
+    elif awaiting == "individual_price_search":
+        await _handle_individual_price_search(update, context)
+    elif awaiting == "item_price":
+        await _handle_item_price(update, context)
     elif awaiting == "lookup_user":
         await _handle_lookup_user(update, context)
     elif awaiting == "bal_delta":
@@ -987,6 +1062,123 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ============================================================
 #  Text sub-handlers
 # ============================================================
+async def _parse_price(text: str) -> Decimal | None:
+    try:
+        p = Decimal(text.strip().lstrip(f"£$€{config.CURRENCY_SYMBOL}"))
+        return p if p > 0 else None
+    except InvalidOperation:
+        return None
+
+
+async def _handle_global_price(update, context) -> None:
+    context.user_data["adm_awaiting"] = None
+    price = await _parse_price(update.message.text)
+    if not price:
+        await update.message.reply_text("⚠️ Invalid price. Send a number e.g. <code>30</code>", parse_mode="HTML")
+        return
+    count = await db.set_global_price(price)
+    await update.message.reply_text(
+        f"✅ <b>Global Price Updated</b>\n\n"
+        f"New price: <b>{config.CURRENCY_SYMBOL}{price:g}</b>\n"
+        f"Items updated: <b>{count}</b> (across all bases)",
+        parse_mode="HTML",
+    )
+
+
+async def _handle_bin_price_bin(update, context) -> None:
+    bin_ = update.message.text.strip()
+    if not bin_.isdigit() or len(bin_) < 4:
+        await update.message.reply_text("⚠️ Send a valid BIN number, e.g. <code>492181</code>", parse_mode="HTML")
+        return
+    # Check how many items exist with this BIN
+    async with db._pool.acquire() as con:
+        count = await con.fetchval(
+            "SELECT COUNT(*) FROM stock WHERE bin=$1 AND sold=FALSE", bin_
+        )
+    if count == 0:
+        await update.message.reply_text(f"❌ No unsold items found with BIN <code>{bin_}</code>.", parse_mode="HTML")
+        context.user_data["adm_awaiting"] = None
+        return
+    context.user_data["adm_awaiting"]  = "bin_price_amount"
+    context.user_data["adm_price_bin"] = bin_
+    await update.message.reply_text(
+        f"🔢 BIN <code>{bin_}</code> has <b>{count}</b> unsold items.\n\n"
+        f"Send the new price:",
+        parse_mode="HTML",
+    )
+
+
+async def _handle_bin_price_amount(update, context) -> None:
+    bin_  = context.user_data.pop("adm_price_bin", "")
+    context.user_data["adm_awaiting"] = None
+    price = await _parse_price(update.message.text)
+    if not price:
+        await update.message.reply_text("⚠️ Invalid price. Send a number e.g. <code>30</code>", parse_mode="HTML")
+        return
+    count = await db.set_bin_price(bin_, price)
+    await update.message.reply_text(
+        f"✅ <b>BIN Price Updated</b>\n\n"
+        f"BIN:          <code>{bin_}</code>\n"
+        f"New price:    <b>{config.CURRENCY_SYMBOL}{price:g}</b>\n"
+        f"Items updated: <b>{count}</b>",
+        parse_mode="HTML",
+    )
+
+
+async def _handle_individual_price_search(update, context) -> None:
+    bin_ = update.message.text.strip()
+    if not bin_.isdigit() or len(bin_) < 4:
+        await update.message.reply_text("⚠️ Send a valid BIN number.", parse_mode="HTML")
+        return
+    # Fetch all items with this BIN
+    async with db._pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT id,bin,year,code,price,subl_id FROM stock "
+            "WHERE bin=$1 AND sold=FALSE ORDER BY added_at LIMIT 20",
+            bin_,
+        )
+    if not rows:
+        await update.message.reply_text(f"❌ No unsold items with BIN <code>{bin_}</code>.", parse_mode="HTML")
+        context.user_data["adm_awaiting"] = None
+        return
+    context.user_data["adm_awaiting"] = None
+    rows_kb = []
+    for r in rows:
+        label = f"{r['bin']} - {r['year']} - {r['code']} · {config.CURRENCY_SYMBOL}{float(r['price']):g}"
+        rows_kb.append([InlineKeyboardButton(
+            f"✏️ {label}",
+            callback_data=f"adm_itemprice:{r['id']}:{r['subl_id']}",
+        )])
+    rows_kb.append([InlineKeyboardButton("❌ Cancel", callback_data="adm_prices")])
+    await update.message.reply_text(
+        f"🎯 Found <b>{len(rows)}</b> item(s) with BIN <code>{bin_}</code>.\nTap one to set its price:",
+        reply_markup=InlineKeyboardMarkup(rows_kb),
+        parse_mode="HTML",
+    )
+
+
+async def _handle_item_price(update, context) -> None:
+    item_id = context.user_data.pop("adm_item_price_id", "")
+    subl_id = context.user_data.pop("adm_item_price_subl", "")
+    context.user_data["adm_awaiting"] = None
+    price = await _parse_price(update.message.text)
+    if not price:
+        await update.message.reply_text("⚠️ Invalid price. Send a number e.g. <code>30</code>", parse_mode="HTML")
+        return
+    updated = await db.set_item_price(item_id, price)
+    if updated:
+        item = await db.get_stock_item(item_id)
+        label = f"{item['bin']} - {item['year']} - {item['code']}" if item else item_id
+        await update.message.reply_text(
+            f"✅ <b>Item Price Updated</b>\n\n"
+            f"Item:      <code>{label}</code>\n"
+            f"New price: <b>{config.CURRENCY_SYMBOL}{price:g}</b>",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text("❌ Item not found or already sold.")
+
+
 async def _handle_add_base_id(update, context) -> None:
     import re
     raw    = update.message.text.strip().lower()
@@ -1199,70 +1391,85 @@ async def _handle_label_edit(update, context) -> None:
 # ============================================================
 @admin_only
 async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Usage: /price LIST_ID_OR_NAME NEW_PRICE  e.g. /price dd-28th 8"""
+    """
+    /price all 30             — global price (all items)
+    /price bin:459647 35      — all items with that BIN
+    /price dd-28th 30         — all items in a base (ID or name)
+    /price                    — show all options
+    """
     args = context.args or []
     if len(args) < 2:
-        lines = ["Usage: <code>/price LIST_ID NEW_PRICE</code>\n",
-                 "Example: <code>/price dd-28th 8</code>\n",
-                 "Lists (use ID <b>or</b> current name):\n"]
-        for cat in config.CATEGORIES:
-            for s in cat.get("sublists", []):
-                current = db.get_label(f"subl:{s['id']}", s["label"])
-                lines.append(f"  <code>{s['id']}</code> → {current}")
+        lines = [
+            "💰 <b>Price Commands</b>\n",
+            "<code>/price all 30</code> — set price for every item",
+            "<code>/price bin:459647 35</code> — all items with BIN 459647",
+            "<code>/price dd-28th 30</code> — all items in a base\n",
+            "Current bases:",
+        ]
+        for s in db.get_all_sublists():
+            current = db.get_label(f"subl:{s['id']}", s["label"])
+            lines.append(f"  <code>{s['id']}</code> — {current}")
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         return
 
-    # Accept first word(s) as the list identifier — everything except last token
-    raw_price = args[-1]
-    raw_id    = " ".join(args[:-1]).strip().lower()
+    target    = args[0].lower()
+    price_raw = args[-1].lstrip(f"£$€{config.CURRENCY_SYMBOL}")
+    try:
+        price = Decimal(price_raw)
+        if price <= 0:
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        await update.message.reply_text("⚠️ Invalid price. Example: <code>/price all 30</code>", parse_mode="HTML")
+        return
 
-    # Match by ID first, then by current label (so renamed bases work too)
-    matched_id = None
-    for cat in config.CATEGORIES:
-        for s in cat.get("sublists", []):
-            if s["id"] == raw_id:
-                matched_id = s["id"]
-                break
-            current_label = db.get_label(f"subl:{s['id']}", s["label"])
-            # strip emoji and compare
-            import re
-            clean_label = re.sub(r'[^\w\s-]', '', current_label).strip().lower()
-            clean_input = re.sub(r'[^\w\s-]', '', raw_id).strip().lower()
-            if clean_label == clean_input or s["id"] == clean_input:
-                matched_id = s["id"]
-                break
-
-    if not matched_id:
-        valid = ", ".join(
-            f"<code>{s['id']}</code>"
-            for cat in config.CATEGORIES
-            for s in cat.get("sublists", [])
-        )
+    # ── Global ──
+    if target == "all":
+        count = await db.set_global_price(price)
         await update.message.reply_text(
-            f"❌ List not found: <code>{raw_id}</code>\n"
-            f"Valid IDs: {valid}",
+            f"✅ <b>Global price set to {config.CURRENCY_SYMBOL}{price:g}</b>\n"
+            f"Items updated: <b>{count}</b>",
             parse_mode="HTML",
         )
         return
 
-    try:
-        price = Decimal(raw_price.lstrip(config.CURRENCY_SYMBOL))
-        if price <= 0:
-            raise ValueError
-    except (InvalidOperation, ValueError):
+    # ── By BIN ──
+    if target.startswith("bin:"):
+        bin_ = target[4:]
+        count = await db.set_bin_price(bin_, price)
         await update.message.reply_text(
-            "Please provide a valid price, e.g. <code>8</code>",
+            f"✅ BIN <code>{bin_}</code> → <b>{config.CURRENCY_SYMBOL}{price:g}</b>\n"
+            f"Items updated: <b>{count}</b>",
+            parse_mode="HTML",
+        )
+        return
+
+    # ── By Base (ID or label) ──
+    matched_id = None
+    for s in db.get_all_sublists():
+        if s["id"] == target:
+            matched_id = s["id"]; break
+        current = db.get_label(f"subl:{s['id']}", s["label"])
+        import re as _re
+        if _re.sub(r'[^\w\s-]', '', current).strip().lower() == \
+           _re.sub(r'[^\w\s-]', '', target).strip().lower():
+            matched_id = s["id"]; break
+
+    if not matched_id:
+        await update.message.reply_text(
+            f"❌ Unknown target: <code>{target}</code>\n"
+            "Use <code>all</code>, <code>bin:XXXXXX</code>, or a base ID.",
             parse_mode="HTML",
         )
         return
 
     count = await db.set_sublist_price(matched_id, price)
-    label = db.get_label(f"subl:{matched_id}", _subl_label(matched_id))
+    label = _subl_label(matched_id)
     await update.message.reply_text(
-        f"✅ <b>{label}</b> — price updated to <b>{config.CURRENCY_SYMBOL}{price:g}</b>\n"
+        f"✅ <b>{label}</b> → <b>{config.CURRENCY_SYMBOL}{price:g}</b>\n"
         f"Items updated: <b>{count}</b>",
         parse_mode="HTML",
     )
+
     """
     Usage:  /rename KEY New display name
     Examples:
