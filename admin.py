@@ -273,7 +273,7 @@ def stock_overview_kb(counts: dict) -> InlineKeyboardMarkup:
 
 def stock_list_kb(subl_id: str, items: list) -> InlineKeyboardMarkup:
     rows = []
-    for it in items[:20]:
+    for it in items[:30]:   # show up to 30 in admin stock view
         label = f"{it['bin']} - {it['year']} - {it['code']} - {config.CURRENCY_SYMBOL}{float(it['price']):g}"
         rows.append([
             InlineKeyboardButton(f"❌ {label}", callback_data=f"adm_sdel:{it['id']}"),
@@ -290,31 +290,44 @@ def stock_list_kb(subl_id: str, items: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+PRICE_SEL_PER_PAGE = 10   # items per page in the admin price selector
+
+
 def price_select_kb(subl_id: str, items: list,
-                    selected: set) -> InlineKeyboardMarkup:
-    """Item list with ✅/☐ toggles for multi-select repricing."""
+                    selected: set, page: int = 0) -> InlineKeyboardMarkup:
+    """Paginated item list with ✅/☐ toggles for multi-select repricing."""
+    total_pages = max(1, (len(items) + PRICE_SEL_PER_PAGE - 1) // PRICE_SEL_PER_PAGE)
+    page        = max(0, min(page, total_pages - 1))
+    page_items  = items[page * PRICE_SEL_PER_PAGE : (page + 1) * PRICE_SEL_PER_PAGE]
+
     rows = []
-    for it in items[:20]:
-        tick  = "✅" if it["id"] in selected else "☐"
+    for it in page_items:
+        tick  = "✅" if it["id"] in selected else "☐ "
         label = f"{tick} {it['bin']} - {it['year']} - {it['code']} · {config.CURRENCY_SYMBOL}{float(it['price']):g}"
         rows.append([InlineKeyboardButton(
-            label, callback_data=f"adm_pstoggle:{it['id']}:{subl_id}"
+            label, callback_data=f"adm_pstoggle:{it['id']}:{subl_id}:{page}"
         )])
+
+    # Pagination navigation
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_pspage:{subl_id}:{page-1}"))
+    if total_pages > 1:
+        nav.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"adm_pspage:{subl_id}:{page+1}"))
+    if nav:
+        rows.append(nav)
+
     if selected:
         n = len(selected)
         rows.append([InlineKeyboardButton(
             f"💰 Set Price for {n} Item{'s' if n > 1 else ''}",
             callback_data=f"adm_psconfirm:{subl_id}",
         )])
-    rows.append([InlineKeyboardButton(
-        "✅ Select All", callback_data=f"adm_psall:{subl_id}"
-    )])
-    rows.append([InlineKeyboardButton(
-        "☐ Clear Selection", callback_data=f"adm_psclear:{subl_id}"
-    )])
-    rows.append([InlineKeyboardButton(
-        "⬅️ Back to Stock List", callback_data=f"adm_slist:{subl_id}"
-    )])
+    rows.append([InlineKeyboardButton("✅ Select All",       callback_data=f"adm_psall:{subl_id}:{page}")])
+    rows.append([InlineKeyboardButton("☐  Clear Selection", callback_data=f"adm_psclear:{subl_id}:{page}")])
+    rows.append([InlineKeyboardButton("⬅️ Back to Stock",   callback_data=f"adm_slist:{subl_id}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -633,16 +646,20 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     elif data.startswith("adm_pricesel:"):
         subl_id = data.split(":", 1)[1]
-        context.user_data["adm_price_sel"] = set()   # fresh selection
+        context.user_data["adm_price_sel"] = set()
         items  = await db.get_stock(subl_id)
         label  = _subl_label(subl_id)
         await _safe_edit(query,
-            f"🏷️ <b>Select Items to Reprice — {label}</b>\n\n"
-            "Tap items to select/deselect, then tap <b>Set Price</b>.",
-            price_select_kb(subl_id, items, set()))
+            f"🏷️ <b>Select Items to Reprice — {label}</b>\n"
+            f"<code>──────────────────────</code>\n"
+            f"{len(items)} items total · tap to select/deselect:",
+            price_select_kb(subl_id, items, set(), page=0))
 
     elif data.startswith("adm_pstoggle:"):
-        _, item_id, subl_id = data.split(":", 2)
+        parts   = data.split(":")
+        item_id = parts[1]
+        subl_id = parts[2]
+        page    = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
         sel = context.user_data.setdefault("adm_price_sel", set())
         if item_id in sel:
             sel.discard(item_id)
@@ -653,29 +670,51 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         n     = len(sel)
         note  = f" · <b>{n}</b> selected" if n else ""
         await _safe_edit(query,
-            f"🏷️ <b>Select Items to Reprice — {label}</b>{note}\n\n"
-            "Tap items to select/deselect, then tap <b>Set Price</b>.",
-            price_select_kb(subl_id, items, sel))
+            f"🏷️ <b>Select Items to Reprice — {label}</b>{note}\n"
+            f"<code>──────────────────────</code>\n"
+            f"{len(items)} items total · tap to select/deselect:",
+            price_select_kb(subl_id, items, sel, page=page))
+
+    elif data.startswith("adm_pspage:"):
+        _, subl_id, page_s = data.split(":", 2)
+        page  = int(page_s) if page_s.isdigit() else 0
+        sel   = context.user_data.get("adm_price_sel", set())
+        items = await db.get_stock(subl_id)
+        label = _subl_label(subl_id)
+        n     = len(sel)
+        note  = f" · <b>{n}</b> selected" if n else ""
+        await _safe_edit(query,
+            f"🏷️ <b>Select Items to Reprice — {label}</b>{note}\n"
+            f"<code>──────────────────────</code>\n"
+            f"{len(items)} items total · tap to select/deselect:",
+            price_select_kb(subl_id, items, sel, page=page))
 
     elif data.startswith("adm_psall:"):
-        subl_id = data.split(":", 1)[1]
+        parts   = data.split(":")
+        subl_id = parts[1]
+        page    = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
         items   = await db.get_stock(subl_id)
         sel     = {it["id"] for it in items}
         context.user_data["adm_price_sel"] = sel
         label   = _subl_label(subl_id)
         await _safe_edit(query,
-            f"🏷️ <b>Select Items to Reprice — {label}</b> · <b>{len(sel)}</b> selected\n\n"
-            "All items selected. Tap <b>Set Price</b> to continue.",
-            price_select_kb(subl_id, items, sel))
+            f"🏷️ <b>Select Items to Reprice — {label}</b> · <b>{len(sel)}</b> selected\n"
+            f"<code>──────────────────────</code>\n"
+            "All items selected — tap 💰 Set Price to continue:",
+            price_select_kb(subl_id, items, sel, page=page))
 
     elif data.startswith("adm_psclear:"):
-        subl_id = data.split(":", 1)[1]
+        parts   = data.split(":")
+        subl_id = parts[1]
+        page    = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
         context.user_data["adm_price_sel"] = set()
         items   = await db.get_stock(subl_id)
         label   = _subl_label(subl_id)
         await _safe_edit(query,
-            f"🏷️ <b>Select Items to Reprice — {label}</b>\n\nSelection cleared.",
-            price_select_kb(subl_id, items, set()))
+            f"🏷️ <b>Select Items to Reprice — {label}</b>\n"
+            f"<code>──────────────────────</code>\n"
+            "Selection cleared. Tap items to select:",
+            price_select_kb(subl_id, items, set(), page=page))
 
     elif data.startswith("adm_psconfirm:"):
         subl_id = data.split(":", 1)[1]
