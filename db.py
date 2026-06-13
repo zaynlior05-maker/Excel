@@ -159,6 +159,15 @@ async def ensure_user(user_id: int, username: str = "") -> None:
         )
 
 
+async def get_username(user_id: int) -> str:
+    """Return stored @username for a user, or empty string if unknown."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "SELECT username FROM users WHERE user_id=$1", user_id
+        )
+        return (row["username"] or "") if row else ""
+
+
 async def get_balance(user_id: int) -> Decimal:
     async with _pool.acquire() as con:
         row = await con.fetchrow("SELECT balance FROM users WHERE user_id=$1", user_id)
