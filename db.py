@@ -7,6 +7,7 @@ Tables:
   stock    -> every line item, managed live via admin panel
   orders   -> record of every purchase
   labels   -> display-name overrides for any button/category/sublist
+  sublists -> dynamic sublist/base registry (add/remove via admin panel)
 """
 
 import uuid
@@ -18,9 +19,11 @@ import config
 
 _pool: asyncpg.Pool | None = None
 
-# In-memory label cache: key -> overridden value.
-# Missing key = use the hard-coded default from config.
+# In-memory label cache
 _label_cache: dict[str, str] = {}
+
+# In-memory sublist cache: cat_id -> list of {id, cat_id, label}
+_sublist_cache: dict[str, list[dict]] = {}
 
 
 # ============================================================
@@ -72,9 +75,18 @@ async def init() -> None:
                 value      TEXT NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
+            CREATE TABLE IF NOT EXISTS sublists (
+                id         TEXT PRIMARY KEY,
+                cat_id     TEXT NOT NULL DEFAULT 'ff',
+                label      TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
         """)
     await _seed_stock()
     await _load_label_cache()
+    await _seed_sublists()
+    await _refresh_sublist_cache()
     # Add username column if this is an existing database that predates it
     async with _pool.acquire() as con:
         await con.execute(
@@ -85,6 +97,94 @@ async def init() -> None:
 # ============================================================
 #  Label cache
 # ============================================================
+async def _seed_sublists() -> None:
+    """Populate sublists table from config.CATEGORIES if it's empty."""
+    async with _pool.acquire() as con:
+        count = await con.fetchval("SELECT COUNT(*) FROM sublists")
+        if count == 0:
+            for cat in config.CATEGORIES:
+                for i, subl in enumerate(cat.get("sublists", [])):
+                    await con.execute(
+                        "INSERT INTO sublists(id,cat_id,label,sort_order) "
+                        "VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+                        subl["id"], cat["id"], subl["label"], i,
+                    )
+
+
+async def _refresh_sublist_cache() -> None:
+    global _sublist_cache
+    async with _pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT id,cat_id,label FROM sublists ORDER BY cat_id,sort_order,id"
+        )
+    cache: dict[str, list[dict]] = {}
+    for r in rows:
+        cat_id = r["cat_id"]
+        cache.setdefault(cat_id, []).append(
+            {"id": r["id"], "cat_id": r["cat_id"], "label": r["label"]}
+        )
+    _sublist_cache = cache
+
+
+def get_sublists(cat_id: str) -> list[dict]:
+    """Synchronous — reads from in-memory cache."""
+    return list(_sublist_cache.get(cat_id, []))
+
+
+def get_all_sublists() -> list[dict]:
+    """All sublists across all categories, flat list."""
+    result = []
+    for items in _sublist_cache.values():
+        result.extend(items)
+    return result
+
+
+def find_sublist_by_id(subl_id: str) -> dict | None:
+    """Find a sublist dict by its ID regardless of category."""
+    for items in _sublist_cache.values():
+        for s in items:
+            if s["id"] == subl_id:
+                return s
+    return None
+
+
+async def add_sublist(subl_id: str, cat_id: str, label: str) -> bool:
+    """Add a new sublist. Returns False if ID already exists."""
+    try:
+        async with _pool.acquire() as con:
+            max_order = await con.fetchval(
+                "SELECT COALESCE(MAX(sort_order),0) FROM sublists WHERE cat_id=$1", cat_id
+            )
+            await con.execute(
+                "INSERT INTO sublists(id,cat_id,label,sort_order) VALUES($1,$2,$3,$4)",
+                subl_id, cat_id, label, (max_order or 0) + 1,
+            )
+        await _refresh_sublist_cache()
+        return True
+    except Exception:
+        return False
+
+
+async def remove_sublist(subl_id: str) -> int:
+    """Delete a sublist and ALL its stock. Returns number of stock items deleted."""
+    async with _pool.acquire() as con:
+        result = await con.execute("DELETE FROM stock WHERE subl_id=$1", subl_id)
+        stock_deleted = int(result.split()[-1])
+        await con.execute("DELETE FROM sublists WHERE id=$1", subl_id)
+    await _refresh_sublist_cache()
+    return stock_deleted
+
+
+async def get_stock_counts() -> dict[str, int]:
+    """Return {subl_id: unsold_count} for all sublists."""
+    async with _pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT subl_id, COUNT(*) AS cnt FROM stock "
+            "WHERE sold=FALSE GROUP BY subl_id"
+        )
+    return {r["subl_id"]: r["cnt"] for r in rows}
+
+
 async def _load_label_cache() -> None:
     """Read all label overrides from DB into the in-memory cache."""
     global _label_cache
