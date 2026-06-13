@@ -57,11 +57,13 @@ logger = logging.getLogger(__name__)
 # ============================================================
 def welcome_text() -> str:
     return (
-        "Welcome to EXCEL Store 👋\n"
-        "Use the menu below to interact with the bot 🤖\n"
-        "===============\n"
-        "Managed by @EXCELV1\n"
-        "Coded by @EXCELV1 on session 05a5c62989edb4dadf7cb1274e35e37d498b5af459b04e08fe08ab037a206ec841"
+        f"\U0001F539 Support account is available 24/7 {config.SUPPORT_HANDLE}\n"
+        "\U0001F539\n"
+        "\U0001F539 <b>BY PURCHASING YOU AGREE TO THESE RULES. "
+        "FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. "
+        "WE SHALL GIVE NO WARNINGS</b>\n\n"
+        "Welcome to the Store \U0001F44B\n"
+        "Use the menu below to interact with the bot \U0001F916"
     )
 
 
@@ -147,21 +149,46 @@ def format_line(item) -> str:
             f"{config.CURRENCY_SYMBOL}{price_str}")
 
 
-def lines_menu(cat_id, subl_id, items, page=0) -> InlineKeyboardMarkup:
-    """All buttons are full-width single rows — no side-by-side buttons."""
+def lines_menu(cat_id, subl_id, items, page=0, cart=None) -> InlineKeyboardMarkup:
+    """
+    Cart-aware item listing.
+    - Items show ✅ prefix when selected.
+    - Tapping an item toggles selection (sel: callback).
+    - Checkout button appears when cart is not empty.
+    - Refresh resets to page 0 via refresh: callback.
+    """
+    if cart is None:
+        cart = {}
+
     per         = config.ITEMS_PER_PAGE
     total_pages = max(1, (len(items) + per - 1) // per)
     page        = max(0, min(page, total_pages - 1))
     page_items  = items[page * per : page * per + per]
 
-    rows = [[InlineKeyboardButton(
-        format_line(it), callback_data=f"line:{subl_id}:{it['id']}")]
-        for it in page_items]
+    rows = []
+    for it in page_items:
+        selected = it["id"] in cart
+        label    = ("✅ " if selected else "") + format_line(it)
+        rows.append([InlineKeyboardButton(
+            label, callback_data=f"sel:{subl_id}:{it['id']}:{page}"
+        )])
 
-    # Navigation — every button is its own full-width row
+    # Checkout button — only when something is in the cart
+    if cart:
+        selected_items = [it for it in items if it["id"] in cart]
+        total = sum(float(it["price"]) for it in selected_items)
+        count = len(cart)
+        s     = "s" if count != 1 else ""
+        rows.append([InlineKeyboardButton(
+            f"🛒 Proceed to Buy ({count} Item{s} Selected)  "
+            f"{config.CURRENCY_SYMBOL}{total:g}",
+            callback_data=f"cart_checkout:{cat_id}:{subl_id}:{page}",
+        )])
+
+    # Navigation — all full-width, Refresh uses separate callback
     rows.append([InlineKeyboardButton(
-        "\U0001F504 Refresh",
-        callback_data=f"page:{cat_id}:{subl_id}:{page}",
+        "🔄 Refresh",
+        callback_data=f"refresh:{cat_id}:{subl_id}",
     )])
     if page < total_pages - 1:
         rows.append([InlineKeyboardButton(
@@ -173,6 +200,18 @@ def lines_menu(cat_id, subl_id, items, page=0) -> InlineKeyboardMarkup:
             "\u2B05\uFE0F Previous Page",
             callback_data=f"page:{cat_id}:{subl_id}:{page - 1}",
         )])
+
+    subl_default = next(
+        (s["label"] for cat in config.CATEGORIES
+         for s in cat.get("sublists", []) if s["id"] == subl_id),
+        subl_id,
+    )
+    rows.append([InlineKeyboardButton(
+        f"\U0001F519 {db.get_label(f'subl:{subl_id}', subl_default)}",
+        callback_data=f"cat:{cat_id}",
+    )])
+    rows.append([InlineKeyboardButton("🌏 Main Menu", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
 
     subl_default = next(
         (s["label"] for cat in config.CATEGORIES
@@ -476,7 +515,7 @@ async def handle_bin_search(update, context) -> None:
         return
 
     rows = [[InlineKeyboardButton(
-        format_line(it), callback_data=f"line:{sid}:{it['id']}")]
+        format_line(it), callback_data=f"sel:{sid}:{it['id']}:0")]
         for sid, it in matches]
     rows.append([InlineKeyboardButton("\u2B05\uFE0F Back",    callback_data=f"cat:{cat_id}")])
     rows.append([InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")])
@@ -570,18 +609,16 @@ async def _route_button(query, data: str, uid: int,
         subl_label = db.get_label(f"subl:{subl_id}", subl["label"])
         await channel_log.nav_event(uid, "Sublist", subl_label)
         items = await db.get_stock(subl_id)
+        cart  = context.user_data.get("cart", {})
+        context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": 0}
         if not items:
-            await safe_edit(
-                query,
+            await safe_edit(query,
                 f"{subl_label}\n<code>──────────────────────</code>\nNo lines in stock right now.",
-                sublist_back_menu(cat_id),
-            )
+                sublist_back_menu(cat_id))
             return
-        await safe_edit(
-            query,
-            f"{subl_label}\n<code>──────────────────────</code>\nTap a line to view it:",
-            lines_menu(cat_id, subl_id, items, page=0),
-        )
+        await safe_edit(query,
+            f"{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
+            lines_menu(cat_id, subl_id, items, page=0, cart=cart))
 
     elif data.startswith("page:"):
         _, cat_id, subl_id, page_s = data.split(":", 3)
@@ -591,131 +628,163 @@ async def _route_button(query, data: str, uid: int,
         if not subl:
             await safe_edit(query, "List not found.", store_menu())
             return
+        subl_label = db.get_label(f"subl:{subl_id}", subl["label"])
         items = await db.get_stock(subl_id)
-        await safe_edit(query, f"{subl['label']}\n\nTap a line to view it:",
-                        lines_menu(cat_id, subl_id, items, page=page))
+        cart  = context.user_data.get("cart", {})
+        context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": page}
+        await safe_edit(query,
+            f"{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
+            lines_menu(cat_id, subl_id, items, page=page, cart=cart))
 
-    elif data.startswith("line:"):
-        _, subl_id, line_id = data.split(":", 2)
-        item = await db.get_stock_item(line_id)
-        parent_cat = next(
-            (c for c in config.CATEGORIES
-             if any(s["id"] == subl_id for s in c.get("sublists", []))),
-            None,
-        )
-        cat_id = parent_cat["id"] if parent_cat else "ff"
-
-        if not item or item.get("sold"):
-            await safe_edit(
-                query,
-                "❌ <b>No Longer Available</b>\n\n"
-                "This item has already been sold.\n"
-                "Tap below to go back and browse other listings.",
-                InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\u2B05\uFE0F Back to List",
-                                         callback_data=f"subl:{cat_id}:{subl_id}")],
-                    [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
-                ]),
-            )
+    elif data.startswith("refresh:"):
+        _, cat_id, subl_id = data.split(":", 2)
+        was_on_page = context.user_data.get("nav", {}).get("page", 0)
+        context.user_data["cart"] = {}
+        context.user_data["nav"]  = {"cat_id": cat_id, "subl_id": subl_id, "page": 0}
+        cat  = find_category(cat_id)
+        subl = find_sublist(cat, subl_id)
+        subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
+        items = await db.get_stock(subl_id)
+        banner = "✅ <b>LIST UPDATED</b> ✅\n\n" if was_on_page > 0 else ""
+        if not items:
+            await safe_edit(query,
+                f"{banner}{subl_label}\n<code>──────────────────────</code>\nNo lines in stock right now.",
+                sublist_back_menu(cat_id))
             return
+        await safe_edit(query,
+            f"{banner}{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
+            lines_menu(cat_id, subl_id, items, page=0, cart={}))
 
-        bal       = await db.get_balance(uid)
-        price_str = f"{float(item['price']):g}"
-        can_buy   = bal >= item["price"]
-        shortfall = item["price"] - bal
+    elif data.startswith("sel:"):
+        parts   = data.split(":", 3)
+        subl_id = parts[1]
+        item_id = parts[2]
+        page    = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        cart    = context.user_data.setdefault("cart", {})
+        parent_cat = next((c for c in config.CATEGORIES
+            if any(s["id"] == subl_id for s in c.get("sublists", []))), None)
+        cat_id = parent_cat["id"] if parent_cat else "ff"
+        if item_id in cart:
+            del cart[item_id]
+        else:
+            item = await db.get_stock_item(item_id)
+            if not item or item.get("sold"):
+                await query.answer("⚠️ This item is no longer available.", show_alert=True)
+                items = await db.get_stock(subl_id)
+                subl  = find_sublist(find_category(cat_id), subl_id)
+                subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
+                await safe_edit(query,
+                    f"{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
+                    lines_menu(cat_id, subl_id, items, page=page, cart=cart))
+                return
+            cart[item_id] = subl_id
+        context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": page}
+        items = await db.get_stock(subl_id)
+        subl  = find_sublist(find_category(cat_id), subl_id)
+        subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
+        count = len(cart)
+        note  = f" · 🛒 <b>{count}</b> in cart" if count else ""
+        await safe_edit(query,
+            f"{subl_label}\n<code>──────────────────────</code>\nTap to select/deselect{note}:",
+            lines_menu(cat_id, subl_id, items, page=page, cart=cart))
 
-        buy_row = (
-            [InlineKeyboardButton(
-                f"\U0001F6D2 Buy — {config.CURRENCY_SYMBOL}{price_str}",
-                callback_data=f"buy:{subl_id}:{line_id}",
-            )]
-            if can_buy else
-            [InlineKeyboardButton(
-                f"\U0001F4B3 Top Up {config.CURRENCY_SYMBOL}{float(shortfall):g} to Buy",
-                callback_data="topup",
-            )]
+    elif data.startswith("cart_checkout:"):
+        _, cat_id, subl_id, page_s = data.split(":", 3)
+        cart = context.user_data.get("cart", {})
+        if not cart:
+            await query.answer("No items selected!", show_alert=True)
+            return
+        selected, gone = [], 0
+        for iid in list(cart.keys()):
+            item = await db.get_stock_item(iid)
+            if item and not item.get("sold"):
+                selected.append(item)
+            else:
+                del context.user_data["cart"][iid]; gone += 1
+        if not selected:
+            await query.answer("All selected items are now sold out!", show_alert=True)
+            items = await db.get_stock(subl_id)
+            subl  = find_sublist(find_category(cat_id), subl_id)
+            subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
+            await safe_edit(query,
+                f"❌ All items sold\n\n{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
+                lines_menu(cat_id, subl_id, items, page=int(page_s), cart={}))
+            return
+        total = sum(Decimal(str(it["price"])) for it in selected)
+        bal   = await db.get_balance(uid)
+        summary = (
+            "🛒 <b>Order Summary</b>\n"
+            "<code>──────────────────────</code>\n"
+            + "\n".join(f"• {format_line(it)}" for it in selected) + "\n"
+            "<code>──────────────────────</code>\n"
+            f"Items:    <b>{len(selected)}</b>\n"
+            f"Total:    <b>{config.CURRENCY_SYMBOL}{float(total):g}</b>\n"
+            f"Balance:  {config.CURRENCY_SYMBOL}{bal:.2f}"
+            + (f"\n⚠️ {gone} item(s) sold and removed." if gone else "")
         )
-        await channel_log.item_viewed(
-            uid, item["bin"], item["year"], item["code"],
-            float(item["price"]), subl_id,
-        )
-        await safe_edit(
-            query,
-            f"<b>{format_line(item)}</b>\n\n"
-            f"BIN:          <code>{item['bin']}</code>\n"
-            f"Year:         {item['year']}\n"
-            f"Code/Region:  {item['code']}\n"
-            f"Price:        <b>{config.CURRENCY_SYMBOL}{price_str}</b>\n"
-            f"Your balance: {config.CURRENCY_SYMBOL}{bal:.2f}\n\n"
-            + ("✅ You have enough balance to buy." if can_buy else
-               f"⚠️ You need <b>{config.CURRENCY_SYMBOL}{float(shortfall):g}</b> more to buy this."),
+        if bal < total:
+            shortfall = total - bal
+            await safe_edit(query, summary + f"\n\n❌ Need <b>{config.CURRENCY_SYMBOL}{float(shortfall):g}</b> more.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("➕ Top Up Now", callback_data="topup")],
+                    [InlineKeyboardButton("⬅️ Back", callback_data=f"subl:{cat_id}:{subl_id}")],
+                    [InlineKeyboardButton("🌏 Main Menu", callback_data="menu")],
+                ]))
+            return
+        await safe_edit(query, summary + "\n\n✅ Balance sufficient — confirm?",
             InlineKeyboardMarkup([
-                buy_row,
-                [InlineKeyboardButton("\u2B05\uFE0F Back to List",
-                                      callback_data=f"subl:{cat_id}:{subl_id}")],
-                [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
-            ]),
+                [InlineKeyboardButton(f"✅ Confirm — {config.CURRENCY_SYMBOL}{float(total):g}",
+                    callback_data=f"cart_confirm:{cat_id}:{subl_id}:{page_s}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data=f"subl:{cat_id}:{subl_id}")],
+                [InlineKeyboardButton("🌏 Main Menu", callback_data="menu")],
+            ]))
+
+    elif data.startswith("cart_confirm:"):
+        _, cat_id, subl_id, _ = data.split(":", 3)
+        cart = context.user_data.get("cart", {})
+        if not cart:
+            await safe_edit(query, "Cart is empty.", main_menu()); return
+        purchased, failed, total_spent = [], [], Decimal("0")
+        for iid in list(cart.keys()):
+            result = await db.purchase_item(uid, iid)
+            if result["status"] == "success":
+                purchased.append(result); total_spent += result["price"]
+            else:
+                failed.append(result["status"])
+        context.user_data["cart"] = {}
+        new_bal = await db.get_balance(uid)
+        if not purchased:
+            await safe_edit(query,
+                "❌ <b>Purchase Failed</b>\n\nAll items became unavailable. Please try again.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🛒 Back to Store", callback_data="store")],
+                    [InlineKeyboardButton("🌏 Main Menu", callback_data="menu")],
+                ]))
+            return
+        delivery = [
+            "✅ <b>Purchase Complete!</b>",
+            "<code>──────────────────────</code>",
+            f"Bought:      <b>{len(purchased)}</b> item(s)",
+            f"Spent:       <b>{config.CURRENCY_SYMBOL}{float(total_spent):g}</b>",
+            f"New balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}",
+        ]
+        if failed:
+            delivery.append(f"⚠️ {len(failed)} item(s) unavailable (skipped).")
+        delivery += ["", "<b>📦 Your Items:</b>", "<code>──────────────────────</code>"]
+        for r in purchased:
+            delivery.append(f"<code>{r['content']}</code>")
+        delivery += ["<code>──────────────────────</code>", "<i>Screenshot or copy now.</i>"]
+        await safe_edit(query, "\n".join(delivery),
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒 Buy More", callback_data=f"subl:{cat_id}:{subl_id}")],
+                [InlineKeyboardButton("🌏 Main Menu", callback_data="menu")],
+            ]))
+        await channel_log.log(
+            f"🛒 <b>Cart Purchase</b>\n"
+            f"User: <code>{uid}</code>\n"
+            f"Items: {len(purchased)}  ·  Total: {config.CURRENCY_SYMBOL}{float(total_spent):g}\n"
+            f"Balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}"
         )
-
-    elif data.startswith("buy:"):
-        _, subl_id, line_id = data.split(":", 2)
-        result = await db.purchase_item(uid, line_id)
-
-        if result["status"] == "not_available":
-            parent_cat = next(
-                (c for c in config.CATEGORIES
-                 if any(s["id"] == subl_id for s in c.get("sublists", []))),
-                None,
-            )
-            cat_id = parent_cat["id"] if parent_cat else "ff"
-            await safe_edit(
-                query,
-                "❌ <b>No Longer Available</b>\n\n"
-                "This item was just purchased by someone else.\n"
-                "Tap below to browse other listings.",
-                InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\u2B05\uFE0F Back to List",
-                                         callback_data=f"subl:ff:{subl_id}")],
-                    [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
-                ]),
-            )
-
-        elif result["status"] == "insufficient":
-            shortfall = result["shortfall"]
-            await safe_edit(
-                query,
-                f"⚠️ <b>Insufficient Balance</b>\n\n"
-                f"You need <b>{config.CURRENCY_SYMBOL}{float(shortfall):g}</b> more.\n\n"
-                "Top up your wallet and come back.",
-                InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\u2795 Top Up Now", callback_data="topup")],
-                    [InlineKeyboardButton("\U0001F30F Main Menu", callback_data="menu")],
-                ]),
-            )
-
-        else:  # success
-            new_bal = result["new_balance"]
-            content = result["content"]
-            await channel_log.purchase_made(
-                uid, item["bin"] if item else "?",
-                item["year"] if item else "?",
-                item["code"] if item else "?",
-                float(result["price"]), float(new_bal), subl_id,
-            )
-            await safe_edit(
-                query,
-                f"✅ <b>Purchase Successful!</b>\n\n"
-                f"Paid: <b>{config.CURRENCY_SYMBOL}{float(result['price']):g}</b>\n"
-                f"New balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}\n\n"
-                "─────────────────\n"
-                f"<code>{content}</code>\n"
-                "─────────────────\n\n"
-                "Screenshot this or copy it now.",
-                InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\U0001F6D2 Back to Store", callback_data="store")],
-                    [InlineKeyboardButton("\U0001F30F Main Menu",     callback_data="menu")],
-                ]),
-            )
 
     elif data.startswith("binsearch:"):
         cat_id = data.split(":", 1)[1]
