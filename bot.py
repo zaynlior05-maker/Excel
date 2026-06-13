@@ -426,8 +426,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await handle_bin_search(update, context)
         return
 
-    # Handle reply-keyboard shortcuts — strip emojis and match loosely
-    import re
+    # ── Admin ghost sender ──────────────────────────────────────────
+    # Admin sent plain text not caught by any flow → relay it and stop
+    uid = update.effective_user.id if update.effective_user else 0
+    if admin.is_admin(uid, context.user_data):
+        await admin_relay(update, context)
+        return
+
+    # ── Reply-keyboard shortcuts (regular users) ────────────────────
     txt   = update.message.text.strip().lower()
     clean = re.sub(r'[^\w\s]', '', txt).strip().lower()
     if "store" in clean:
@@ -530,7 +536,29 @@ async def handle_bin_search(update, context) -> None:
     )
 
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def admin_relay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Ghost sender — admin sends any message/file to the bot,
+    bot copies it back from itself. Admin then forwards the bot's
+    copy to their channel, showing 'Forwarded from [Bot Name]'.
+    Only fires when admin is NOT in the middle of a command flow.
+    """
+    if not update.message:
+        return
+    uid = update.effective_user.id
+    if not admin.is_admin(uid, context.user_data):
+        return
+    # Don't intercept if admin is mid-flow (uploading, typing, etc.)
+    if context.user_data.get("adm_awaiting") or context.user_data.get("adm_awaiting_pw"):
+        return
+    try:
+        await context.bot.copy_message(
+            chat_id=uid,
+            from_chat_id=uid,
+            message_id=update.message.message_id,
+        )
+    except Exception as e:
+        logger.warning("Relay failed: %s", e)
     """Log all unhandled exceptions so nothing fails silently."""
     logger.error("Unhandled exception:", exc_info=context.error)
     # Try to notify the user something went wrong
@@ -1049,6 +1077,12 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.PHOTO & filters.UpdateType.MESSAGE, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    # Admin ghost sender — relay any media the admin sends
+    app.add_handler(MessageHandler(
+        (filters.PHOTO | filters.Document.ALL | filters.VIDEO |
+         filters.AUDIO | filters.VOICE | filters.Sticker.ALL) & ~filters.COMMAND,
+        admin_relay,
+    ))
 
     logger.info("Bot is starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
