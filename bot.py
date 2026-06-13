@@ -57,11 +57,13 @@ logger = logging.getLogger(__name__)
 # ============================================================
 def welcome_text() -> str:
     return (
-        "Welcome to EXCEL Store 👋\n"
-        "Use the menu below to interact with the bot 🤖\n"
-        "===============\n"
-        "Managed by @EXCELV1\n"
-        "Coded by @EXCELV1 on session 05a5c62989edb4dadf7cb1274e35e37d498b5af459b04e08fe08ab037a206ec841"
+        f"\U0001F539 Support account is available 24/7 {config.SUPPORT_HANDLE}\n"
+        "\U0001F539\n"
+        "\U0001F539 <b>BY PURCHASING YOU AGREE TO THESE RULES. "
+        "FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. "
+        "WE SHALL GIVE NO WARNINGS</b>\n\n"
+        "Welcome to the Store \U0001F44B\n"
+        "Use the menu below to interact with the bot \U0001F916"
     )
 
 
@@ -636,22 +638,23 @@ async def _route_button(query, data: str, uid: int,
 
     elif data.startswith("refresh:"):
         _, cat_id, subl_id = data.split(":", 2)
-        was_on_page = context.user_data.get("nav", {}).get("page", 0)
-        context.user_data["cart"] = {}
-        context.user_data["nav"]  = {"cat_id": cat_id, "subl_id": subl_id, "page": 0}
-        cat  = find_category(cat_id)
-        subl = find_sublist(cat, subl_id)
+        context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": 0}
+        cart  = context.user_data.get("cart", {})   # cart is KEPT
+        cat   = find_category(cat_id)
+        subl  = find_sublist(cat, subl_id)
         subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
         items = await db.get_stock(subl_id)
-        banner = "✅ <b>LIST UPDATED</b> ✅\n\n" if was_on_page > 0 else ""
+        banner = "✅ <b>LIST UPDATED</b> ✅\n\n"   # always shown
+        count  = len(cart)
+        note   = f" · 🛒 <b>{count}</b> in cart" if count else ""
         if not items:
             await safe_edit(query,
                 f"{banner}{subl_label}\n<code>──────────────────────</code>\nNo lines in stock right now.",
                 sublist_back_menu(cat_id))
             return
         await safe_edit(query,
-            f"{banner}{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
-            lines_menu(cat_id, subl_id, items, page=0, cart={}))
+            f"{banner}{subl_label}\n<code>──────────────────────</code>\nTap to select/deselect{note}:",
+            lines_menu(cat_id, subl_id, items, page=0, cart=cart))
 
     elif data.startswith("sel:"):
         parts   = data.split(":", 3)
