@@ -919,7 +919,9 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _handle_add_item(update, context) -> None:
     subl_id = context.user_data.get("adm_subl", "")
     raw     = update.message.text.strip()
-    rows, skipped, errors = _parse_stock_file(raw, subl_id)
+    # Fetch live price first — uploads never reset it
+    current_price = await db.get_sublist_price(subl_id)
+    rows, skipped, errors = _parse_stock_file(raw, subl_id, current_price)
 
     context.user_data["adm_awaiting"] = None
     added, duplicate = 0, 0
@@ -1261,38 +1263,26 @@ def _detect_delimiter(line: str) -> str:
 
 def _generate_items(bin_: str, price: Decimal,
                     subl_id: str, count: int) -> list[tuple]:
-    """
-    Auto-generate `count` unique rows from a single BIN.
-    Each row gets a random year (1930-1988) and a random UK outcode.
-    Content (customer delivery) is stored as  BIN|YEAR|OUTCODE
-    """
     rows = []
     for _ in range(count):
-        year  = str(random.randint(1930, 1988))
-        code  = random.choice(UK_OUTCODES)
+        year    = str(random.randint(1930, 1988))
+        code    = random.choice(UK_OUTCODES)
         content = f"{bin_}|{year}|{code}"
         rows.append((uuid.uuid4().hex[:8], subl_id, bin_, year, code, price, content))
     return rows
 
 
-def _parse_stock_file(raw: str, subl_id: str) -> tuple[list[tuple], int, list[str]]:
+def _parse_stock_file(raw: str, subl_id: str,
+                      current_price: Decimal | None = None) -> tuple[list[tuple], int, list[str]]:
     """
-    Parse file text into DB-ready tuples.
-    Supports two modes on the same file:
+    PRICE RULE: If upload line has no price → use current_price (list live price).
+    This means uploading NEVER resets a list's price.
 
-    MODE A — Auto-generation (multiplier format):
-        BIN|SEED_YEAR|SEED_CODE x[N]
-        BIN|SEED_YEAR|SEED_CODE|PRICE x[N]
-        → Generates N unique rows with randomised year (1930-1988) and UK outcode.
-          SEED_YEAR and SEED_CODE are discarded; only BIN and optional PRICE are used.
-        e.g.  459667|2012|Ex3 x10        → 10 generated rows at default £5
-              459667|2012|Ex3|10 x10     → 10 generated rows at £10
-
-    MODE B — Direct import (no multiplier):
-        BIN|YEAR|CODE|PRICE|CONTENT
-        → Imported exactly as-is.
-
-    Returns (rows, skipped_count, sample_error_lines).
+    FORMAT A  BIN|SEED|CODE x[N]         generate N items at current_price
+    FORMAT A  BIN|SEED|CODE|PRICE x[N]   generate N items at PRICE
+    FORMAT B  BIN|SEED|CODE              generate 1 item  at current_price  (no multiplier)
+    FORMAT B  BIN|SEED|CODE|PRICE        generate 1 item  at PRICE
+    FORMAT C  BIN|YEAR|CODE|PRICE|DATA   direct import, 5+ fields, no generation
     """
     lines      = [l.rstrip() for l in raw.splitlines()]
     data_lines = [l for l in lines if l.strip() and not l.startswith("#")]
@@ -1300,6 +1290,7 @@ def _parse_stock_file(raw: str, subl_id: str) -> tuple[list[tuple], int, list[st
         return [], 0, []
 
     sep = _detect_delimiter(data_lines[0])
+    fallback = current_price if current_price else Decimal("5")
 
     rows: list[tuple] = []
     skipped  = 0
@@ -1310,61 +1301,57 @@ def _parse_stock_file(raw: str, subl_id: str) -> tuple[list[tuple], int, list[st
         if not line or line.startswith("#"):
             continue
 
-        # ── Detect multiplier (x10, x187, etc.) anywhere at end of line ──
         mult_match = re.search(r'\bx(\d+)\s*$', line, re.IGNORECASE)
+        parts_raw  = [p.strip() for p in line.split(sep)]
 
         if mult_match:
-            # ── MODE A: generation ──
-            count    = int(mult_match.group(1))
-            base     = line[:mult_match.start()].rstrip()
-            parts    = [p.strip() for p in base.split(sep)]
+            count = int(mult_match.group(1))
+            base  = line[:mult_match.start()].rstrip()
+            parts = [p.strip() for p in base.split(sep)]
+            use_gen = True
+        elif len(parts_raw) >= 5:
+            use_gen = False
+            parts   = parts_raw
+            count   = 1
+        else:
+            count   = 1
+            parts   = parts_raw
+            use_gen = True
 
-            if len(parts) < 1 or not parts[0].isdigit() or len(parts[0]) < 4:
-                skipped += count
-                if len(errors) < 3:
-                    errors.append(f"Bad BIN in: <code>{line[:50]}</code>")
-                continue
+        bin_ = parts[0] if parts else ""
+        if not bin_.isdigit() or len(bin_) < 4:
+            skipped += count if use_gen else 1
+            if len(errors) < 3:
+                errors.append(f"Bad BIN: <code>{line[:50]}</code>")
+            continue
 
-            bin_ = parts[0]
-            # Optional price in 4th segment
-            price = Decimal("5")   # default
+        if use_gen:
+            price = fallback
             if len(parts) >= 4:
                 try:
-                    price = Decimal(parts[3].lstrip("£$€"))
-                    if price <= 0:
-                        price = Decimal("5")
+                    p = Decimal(parts[3].lstrip("£$€"))
+                    if p > 0:
+                        price = p
                 except InvalidOperation:
                     pass
-
             rows.extend(_generate_items(bin_, price, subl_id, count))
-
         else:
-            # ── MODE B: direct import ──
-            parts = [p.strip() for p in line.split(sep)]
-            if len(parts) < 5:
-                skipped += 1
-                continue
-            bin_      = parts[0]
-            year      = parts[1]
-            code      = parts[2]
-            raw_price = parts[3].lstrip("£$€")
-            content   = sep.join(parts[4:]).strip()
-            if not bin_.isdigit() or len(bin_) < 4:
+            year    = parts[1]
+            code    = parts[2]
+            content = sep.join(parts[4:]).strip()
+            if not content:
                 skipped += 1
                 continue
             try:
-                price = Decimal(raw_price)
+                price = Decimal(parts[3].lstrip("£$€"))
             except InvalidOperation:
                 skipped += 1
-                continue
-            if not content:
-                skipped += 1
+                if len(errors) < 3:
+                    errors.append(f"Bad price: <code>{line[:50]}</code>")
                 continue
             rows.append((uuid.uuid4().hex[:8], subl_id, bin_, year, code, price, content))
 
     return rows, skipped, errors
-
-
 async def _run_upload(message, subl_id: str, file_id: str, context) -> None:
     """Download the file, parse it, bulk-insert, reply with a report."""
     label = _subl_label(subl_id)
@@ -1386,7 +1373,9 @@ async def _run_upload(message, subl_id: str, file_id: str, context) -> None:
         await status_msg.edit_text(f"❌ Could not download the file: {exc}")
         return
 
-    rows, skipped, sample_errors = _parse_stock_file(raw_text, subl_id)
+    rows, skipped, sample_errors = _parse_stock_file(
+        raw_text, subl_id, await db.get_sublist_price(subl_id)
+    )
 
     if not rows and skipped == 0:
         await status_msg.edit_text(
