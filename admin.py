@@ -38,6 +38,7 @@ import random
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -57,10 +58,12 @@ class _NullLog:
     def __getattr__(self, _):
         async def _noop(*a, **kw): pass
         return _noop
+    def init(self, bot): pass
 
 try:
-    import channel_log as _cl
-    channel_log = _cl if hasattr(_cl, 'user_start') else _NullLog()
+    import channel_log
+    if not hasattr(channel_log, 'init'):
+        channel_log.init = lambda bot: None
 except ImportError:
     channel_log = _NullLog()
 
@@ -1407,7 +1410,42 @@ async def _run_upload(message, subl_id: str, file_id: str, context) -> None:
 # ============================================================
 @admin_only
 @admin_only
-async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_testlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a test message to the log channel to verify it's working."""
+    if not config.LOG_CHANNEL_ID:
+        await update.message.reply_text(
+            "⚠️ <b>LOG_CHANNEL_ID is not set.</b>\n\n"
+            "Add it in Railway → Variables:\n"
+            "<code>LOG_CHANNEL_ID = -1001234567890</code>\n"
+            "or <code>LOG_CHANNEL_ID = @YourChannel</code>",
+            parse_mode="HTML",
+        )
+        return
+    try:
+        await context.bot.send_message(
+            config.LOG_CHANNEL_ID,
+            f"🔔 <b>Log Channel Test</b>\n\n"
+            f"✅ Connected successfully!\n"
+            f"Bot is delivering notifications to this channel.\n"
+            f"🕐 {datetime.now(timezone.utc).strftime('%d/%m %H:%M UTC')}",
+            parse_mode="HTML",
+        )
+        await update.message.reply_text(
+            f"✅ Test message sent to <code>{config.LOG_CHANNEL_ID}</code>.\n"
+            "Check your log channel — it should have just received a message.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ <b>Failed to send to log channel</b>\n\n"
+            f"Channel: <code>{config.LOG_CHANNEL_ID}</code>\n"
+            f"Error: <code>{e}</code>\n\n"
+            "Common fixes:\n"
+            "1. Make sure the bot is added as <b>Admin</b> in the channel\n"
+            "2. Check the channel ID format (use @username or -100XXXXXXXXXX)\n"
+            "3. Forward a message from the channel to @userinfobot to get the correct ID",
+            parse_mode="HTML",
+        )
     """
     Usage:  /rename KEY New display name
     Examples:
@@ -1585,6 +1623,7 @@ def register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("upload",    cmd_upload))
     app.add_handler(CommandHandler("rename",    cmd_rename))
     app.add_handler(CommandHandler("price",     cmd_price))
+    app.add_handler(CommandHandler("testlog",   cmd_testlog))
 
     # All adm_ callbacks — must run BEFORE the general on_button handler
     app.add_handler(CallbackQueryHandler(
