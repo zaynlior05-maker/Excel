@@ -285,6 +285,9 @@ def stock_list_kb(subl_id: str, items: list) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(
         "💰 Change Price (All Items)", callback_data=f"adm_setprice:{subl_id}"
     )])
+    rows.append([InlineKeyboardButton(
+        "🗑️ Delete This Base", callback_data=f"adm_delbase_confirm:{subl_id}"
+    )])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm_stock")])
     return InlineKeyboardMarkup(rows)
 
@@ -524,8 +527,69 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # ---- Stock overview ----
     elif data == "adm_stock":
         counts = await db.get_stock_counts()
-        await _safe_edit(query, "📦 <b>Stock Management</b>\n\nTap a list to manage it:",
-                         stock_overview_kb(counts))
+        # Build overview with Add New Base button per category
+        rows = []
+        for cat in config.CATEGORIES:
+            sublists = db.get_sublists(cat["id"])
+            for s in sublists:
+                cnt = counts.get(s["id"], 0)
+                lbl = db.get_label(f"subl:{s['id']}", s["label"])
+                rows.append([InlineKeyboardButton(
+                    f"{lbl}  ·  {cnt} items",
+                    callback_data=f"adm_slist:{s['id']}",
+                )])
+            rows.append([InlineKeyboardButton(
+                f"➕ Add New Base to {cat['label']}",
+                callback_data=f"adm_addbase:{cat['id']}",
+            )])
+        rows.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_menu")])
+        await _safe_edit(query,
+            "📦 <b>Stock Management</b>\n\nTap a base to manage it:",
+            InlineKeyboardMarkup(rows))
+
+    elif data.startswith("adm_addbase:"):
+        cat_id = data.split(":", 1)[1]
+        context.user_data["adm_awaiting"]  = "add_base_id"
+        context.user_data["adm_base_cat"]  = cat_id
+        await _safe_edit(query,
+            f"➕ <b>Add New Base to {cat_id.upper()}</b>\n\n"
+            "Step 1 of 2 — Send the base <b>ID</b>\n\n"
+            "Rules: lowercase, no spaces, hyphens OK\n"
+            "Examples: <code>dd-15th</code>  <code>weekly</code>  <code>gold</code>",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="adm_stock")
+            ]]))
+
+    elif data.startswith("adm_delbase_confirm:"):
+        subl_id = data.split(":", 1)[1]
+        label   = _subl_label(subl_id)
+        items   = await db.get_stock(subl_id)
+        await _safe_edit(query,
+            f"🗑️ <b>Delete Base: {label}</b>\n\n"
+            f"⚠️ This will permanently delete:\n"
+            f"• The base itself\n"
+            f"• All <b>{len(items)}</b> stock item(s) inside it\n\n"
+            "This cannot be undone. Are you sure?",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    f"🗑️ Yes, Delete {label}",
+                    callback_data=f"adm_delbase_do:{subl_id}",
+                )],
+                [InlineKeyboardButton("❌ Cancel", callback_data=f"adm_slist:{subl_id}")],
+            ]))
+
+    elif data.startswith("adm_delbase_do:"):
+        subl_id = data.split(":", 1)[1]
+        label   = _subl_label(subl_id)
+        deleted = await db.remove_sublist(subl_id)
+        await _safe_edit(query,
+            f"✅ <b>Base Deleted</b>\n\n"
+            f"Base: <b>{label}</b>\n"
+            f"Stock deleted: <b>{deleted}</b> item(s)\n\n"
+            "The base has been removed from the store.",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("📦 Back to Stock", callback_data="adm_stock")
+            ]]))
 
     elif data.startswith("adm_slist:"):
         subl_id = data.split(":", 1)[1]
@@ -897,6 +961,10 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if awaiting == "add_item":
         await _handle_add_item(update, context)
+    elif awaiting == "add_base_id":
+        await _handle_add_base_id(update, context)
+    elif awaiting == "add_base_label":
+        await _handle_add_base_label(update, context)
     elif awaiting == "lookup_user":
         await _handle_lookup_user(update, context)
     elif awaiting == "bal_delta":
@@ -919,6 +987,71 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ============================================================
 #  Text sub-handlers
 # ============================================================
+async def _handle_add_base_id(update, context) -> None:
+    import re
+    raw    = update.message.text.strip().lower()
+    cat_id = context.user_data.get("adm_base_cat", "ff")
+
+    # Validate ID
+    if not re.match(r'^[a-z0-9][a-z0-9\-]{0,29}$', raw):
+        await update.message.reply_text(
+            "❌ Invalid ID. Use only lowercase letters, numbers, hyphens.\n"
+            "Examples: <code>dd-15th</code>  <code>weekly</code>  <code>vip</code>\n\n"
+            "Try again:",
+            parse_mode="HTML",
+        )
+        return
+    # Check not already taken
+    existing = db.find_sublist_by_id(raw)
+    if existing:
+        await update.message.reply_text(
+            f"❌ A base with ID <code>{raw}</code> already exists.\n"
+            "Please choose a different ID:",
+            parse_mode="HTML",
+        )
+        return
+
+    context.user_data["adm_base_id"]      = raw
+    context.user_data["adm_awaiting"]     = "add_base_label"
+    await update.message.reply_text(
+        f"✅ ID set: <code>{raw}</code>\n\n"
+        "Step 2 of 2 — Send the <b>display name</b> for this base\n\n"
+        "This is what users see in the store.\n"
+        "Examples: <code>🔸 DD-15th</code>  <code>⭐ VIP Base</code>",
+        parse_mode="HTML",
+    )
+
+
+async def _handle_add_base_label(update, context) -> None:
+    label  = update.message.text.strip()
+    cat_id = context.user_data.get("adm_base_cat", "ff")
+    subl_id = context.user_data.get("adm_base_id", "")
+    context.user_data["adm_awaiting"] = None
+
+    if not label or len(label) > 64:
+        await update.message.reply_text("❌ Name must be 1–64 characters. Try again:")
+        context.user_data["adm_awaiting"] = "add_base_label"
+        return
+
+    success = await db.add_sublist(subl_id, cat_id, label)
+    if not success:
+        await update.message.reply_text(
+            f"❌ Could not create base <code>{subl_id}</code> — ID may already exist.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(
+        f"✅ <b>Base Created!</b>\n\n"
+        f"ID:       <code>{subl_id}</code>\n"
+        f"Name:     <b>{label}</b>\n"
+        f"Category: {cat_id.upper()}\n\n"
+        "It's now live in the store. Use /upload or ➕ Add Item to add stock.\n"
+        "Use /rename to rename it anytime.",
+        parse_mode="HTML",
+    )
+
+
 async def _handle_add_item(update, context) -> None:
     subl_id = context.user_data.get("adm_subl", "")
     raw     = update.message.text.strip()
@@ -1192,11 +1325,10 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 #  Helpers
 # ============================================================
 def _subl_label(subl_id: str) -> str:
-    for cat in config.CATEGORIES:
-        for s in cat.get("sublists", []):
-            if s["id"] == subl_id:
-                return s["label"]
-    return subl_id
+    s = db.find_sublist_by_id(subl_id)
+    if s:
+        return db.get_label(f"subl:{subl_id}", s["label"])
+    return db.get_label(f"subl:{subl_id}", subl_id)
 
 
 def _find_subl_by_name(text: str) -> str | None:
