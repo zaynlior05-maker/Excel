@@ -118,7 +118,7 @@ RULES_TEXT = (
     "⛔️ <b>NOTE</b> ⛔️\n"
     "🔹 Support account is available 24/7 @EXCELV1.\n"
     "🔹 1 Transaction per wallet unless payment is underpaid. Our wallet always changes after each completed deposit.\n"
-    "🔹 Payment: <b>BTC ONLY</b>\n\n"
+    "🔹 Payment: <b>CRYPTO ONLY</b>\n\n"
     "<b>BY PURCHASING YOU AGREE TO THESE RULES. FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. WE SHALL GIVE NO WARNINGS.</b>"
 )
 
@@ -144,7 +144,7 @@ REFUND_RULES_TEXT = (
     "⛔️ <b>NOTE</b> ⛔️\n"
     "🔹 Support account is available 24/7 @EXCELV1.\n"
     "🔹 1 Transaction per wallet unless payment is underpaid. Our wallet always changes after each completed deposit.\n"
-    "🔹 Payment: <b>BTC ONLY</b>\n\n"
+    "🔹 Payment: <b>CRYPTO ONLY</b>\n\n"
     "<b>BY PURCHASING YOU AGREE TO THESE RULES. FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. WE SHALL GIVE NO WARNINGS.</b>"
 )
 
