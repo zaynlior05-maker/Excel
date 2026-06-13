@@ -309,7 +309,8 @@ async def get_stock(subl_id: str) -> list[dict]:
     async with _pool.acquire() as con:
         rows = await con.fetch(
             "SELECT id,subl_id,bin,year,code,price,content "
-            "FROM stock WHERE subl_id=$1 AND sold=FALSE ORDER BY added_at",
+            "FROM stock WHERE subl_id=$1 AND sold=FALSE "
+            "ORDER BY bin::bigint ASC, added_at ASC",
             subl_id,
         )
         return [dict(r) for r in rows]
@@ -367,6 +368,16 @@ async def remove_stock_item(item_id: str) -> bool:
             "DELETE FROM stock WHERE id=$1 AND sold=FALSE", item_id
         )
         return result == "DELETE 1"
+
+
+async def get_sublist_price(subl_id: str) -> Decimal | None:
+    """Return the current price of unsold items in a list, or None if empty."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "SELECT price FROM stock WHERE subl_id=$1 AND sold=FALSE LIMIT 1",
+            subl_id,
+        )
+        return row["price"] if row else None
 
 
 async def set_sublist_price(subl_id: str, price: Decimal) -> int:
