@@ -489,6 +489,33 @@ async def get_sublist_price(subl_id: str) -> Decimal | None:
         return row["price"] if row else None
 
 
+async def set_global_price(price: Decimal) -> int:
+    """Set price for ALL unsold items across every list. Returns count updated."""
+    async with _pool.acquire() as con:
+        result = await con.execute(
+            "UPDATE stock SET price=$1 WHERE sold=FALSE", price
+        )
+        return int(result.split()[-1])
+
+
+async def set_bin_price(bin_: str, price: Decimal) -> int:
+    """Set price for all unsold items with a specific BIN. Returns count updated."""
+    async with _pool.acquire() as con:
+        result = await con.execute(
+            "UPDATE stock SET price=$2 WHERE bin=$1 AND sold=FALSE", bin_, price
+        )
+        return int(result.split()[-1])
+
+
+async def set_item_price(item_id: str, price: Decimal) -> bool:
+    """Set price for a single item. Returns True if updated."""
+    async with _pool.acquire() as con:
+        result = await con.execute(
+            "UPDATE stock SET price=$2 WHERE id=$1 AND sold=FALSE", item_id, price
+        )
+        return int(result.split()[-1]) > 0
+
+
 async def set_sublist_price(subl_id: str, price: Decimal) -> int:
     """Update price of all unsold items in a sublist. Returns count updated."""
     async with _pool.acquire() as con:
