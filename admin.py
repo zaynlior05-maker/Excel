@@ -281,11 +281,40 @@ def stock_list_kb(subl_id: str, items: list) -> InlineKeyboardMarkup:
         rows.append([
             InlineKeyboardButton(f"✏️ £ Set Price", callback_data=f"adm_itemprice:{it['id']}:{subl_id}"),
         ])
-    rows.append([InlineKeyboardButton("➕ Add Item",              callback_data=f"adm_sadd:{subl_id}")])
-    rows.append([InlineKeyboardButton("📤 Upload File",           callback_data=f"adm_upload_prompt:{subl_id}")])
+    rows.append([InlineKeyboardButton("➕ Add Item",                 callback_data=f"adm_sadd:{subl_id}")])
+    rows.append([InlineKeyboardButton("📤 Upload File",              callback_data=f"adm_upload_prompt:{subl_id}")])
+    rows.append([InlineKeyboardButton("🏷️ Select Items to Reprice", callback_data=f"adm_pricesel:{subl_id}")])
     rows.append([InlineKeyboardButton("💰 Change Price (All Items)", callback_data=f"adm_setprice:{subl_id}")])
-    rows.append([InlineKeyboardButton("🗑️ Delete This Base",     callback_data=f"adm_delbase_confirm:{subl_id}")])
-    rows.append([InlineKeyboardButton("⬅️ Back",                  callback_data="adm_stock")])
+    rows.append([InlineKeyboardButton("🗑️ Delete This Base",        callback_data=f"adm_delbase_confirm:{subl_id}")])
+    rows.append([InlineKeyboardButton("⬅️ Back",                    callback_data="adm_stock")])
+    return InlineKeyboardMarkup(rows)
+
+
+def price_select_kb(subl_id: str, items: list,
+                    selected: set) -> InlineKeyboardMarkup:
+    """Item list with ✅/☐ toggles for multi-select repricing."""
+    rows = []
+    for it in items[:20]:
+        tick  = "✅" if it["id"] in selected else "☐"
+        label = f"{tick} {it['bin']} - {it['year']} - {it['code']} · {config.CURRENCY_SYMBOL}{float(it['price']):g}"
+        rows.append([InlineKeyboardButton(
+            label, callback_data=f"adm_pstoggle:{it['id']}:{subl_id}"
+        )])
+    if selected:
+        n = len(selected)
+        rows.append([InlineKeyboardButton(
+            f"💰 Set Price for {n} Item{'s' if n > 1 else ''}",
+            callback_data=f"adm_psconfirm:{subl_id}",
+        )])
+    rows.append([InlineKeyboardButton(
+        "✅ Select All", callback_data=f"adm_psall:{subl_id}"
+    )])
+    rows.append([InlineKeyboardButton(
+        "☐ Clear Selection", callback_data=f"adm_psclear:{subl_id}"
+    )])
+    rows.append([InlineKeyboardButton(
+        "⬅️ Back to Stock List", callback_data=f"adm_slist:{subl_id}"
+    )])
     return InlineKeyboardMarkup(rows)
 
 
@@ -601,6 +630,68 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             "<i>e.g. 459667|2012|Ex3|5|4597...:2025 exp...:123</i>"
         )
         await _safe_edit(query, text, stock_list_kb(subl_id, items))
+
+    elif data.startswith("adm_pricesel:"):
+        subl_id = data.split(":", 1)[1]
+        context.user_data["adm_price_sel"] = set()   # fresh selection
+        items  = await db.get_stock(subl_id)
+        label  = _subl_label(subl_id)
+        await _safe_edit(query,
+            f"🏷️ <b>Select Items to Reprice — {label}</b>\n\n"
+            "Tap items to select/deselect, then tap <b>Set Price</b>.",
+            price_select_kb(subl_id, items, set()))
+
+    elif data.startswith("adm_pstoggle:"):
+        _, item_id, subl_id = data.split(":", 2)
+        sel = context.user_data.setdefault("adm_price_sel", set())
+        if item_id in sel:
+            sel.discard(item_id)
+        else:
+            sel.add(item_id)
+        items = await db.get_stock(subl_id)
+        label = _subl_label(subl_id)
+        n     = len(sel)
+        note  = f" · <b>{n}</b> selected" if n else ""
+        await _safe_edit(query,
+            f"🏷️ <b>Select Items to Reprice — {label}</b>{note}\n\n"
+            "Tap items to select/deselect, then tap <b>Set Price</b>.",
+            price_select_kb(subl_id, items, sel))
+
+    elif data.startswith("adm_psall:"):
+        subl_id = data.split(":", 1)[1]
+        items   = await db.get_stock(subl_id)
+        sel     = {it["id"] for it in items}
+        context.user_data["adm_price_sel"] = sel
+        label   = _subl_label(subl_id)
+        await _safe_edit(query,
+            f"🏷️ <b>Select Items to Reprice — {label}</b> · <b>{len(sel)}</b> selected\n\n"
+            "All items selected. Tap <b>Set Price</b> to continue.",
+            price_select_kb(subl_id, items, sel))
+
+    elif data.startswith("adm_psclear:"):
+        subl_id = data.split(":", 1)[1]
+        context.user_data["adm_price_sel"] = set()
+        items   = await db.get_stock(subl_id)
+        label   = _subl_label(subl_id)
+        await _safe_edit(query,
+            f"🏷️ <b>Select Items to Reprice — {label}</b>\n\nSelection cleared.",
+            price_select_kb(subl_id, items, set()))
+
+    elif data.startswith("adm_psconfirm:"):
+        subl_id = data.split(":", 1)[1]
+        sel     = context.user_data.get("adm_price_sel", set())
+        if not sel:
+            await query.answer("No items selected!", show_alert=True)
+            return
+        context.user_data["adm_awaiting"]         = "price_selected_items"
+        context.user_data["adm_price_sel_subl"]   = subl_id
+        n = len(sel)
+        await _safe_edit(query,
+            f"💰 <b>Set Price for {n} Selected Item{'s' if n > 1 else ''}</b>\n\n"
+            "Send the new price (number only):",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data=f"adm_pricesel:{subl_id}")
+            ]]))
 
     elif data.startswith("adm_itemprice:"):
         _, item_id, subl_id = data.split(":", 2)
@@ -1038,6 +1129,8 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _handle_bin_price_amount(update, context)
     elif awaiting == "individual_price_search":
         await _handle_individual_price_search(update, context)
+    elif awaiting == "price_selected_items":
+        await _handle_price_selected_items(update, context)
     elif awaiting == "item_price":
         await _handle_item_price(update, context)
     elif awaiting == "lookup_user":
@@ -1153,6 +1246,41 @@ async def _handle_individual_price_search(update, context) -> None:
     await update.message.reply_text(
         f"🎯 Found <b>{len(rows)}</b> item(s) with BIN <code>{bin_}</code>.\nTap one to set its price:",
         reply_markup=InlineKeyboardMarkup(rows_kb),
+        parse_mode="HTML",
+    )
+
+
+async def _handle_price_selected_items(update, context) -> None:
+    subl_id  = context.user_data.pop("adm_price_sel_subl", "")
+    sel      = context.user_data.pop("adm_price_sel", set())
+    context.user_data["adm_awaiting"] = None
+    price = await _parse_price(update.message.text)
+    if not price:
+        await update.message.reply_text(
+            "⚠️ Invalid price. Send a number e.g. <code>30</code>", parse_mode="HTML")
+        return
+    if not sel:
+        await update.message.reply_text("No items were selected.")
+        return
+    # Update each selected item
+    updated = 0
+    async with db._pool.acquire() as con:
+        for item_id in sel:
+            result = await con.execute(
+                "UPDATE stock SET price=$2 WHERE id=$1 AND sold=FALSE", item_id, price
+            )
+            updated += int(result.split()[-1])
+    label = _subl_label(subl_id)
+    items = await db.get_stock(subl_id)
+    await update.message.reply_text(
+        f"✅ <b>Done!</b>\n\n"
+        f"Base:          <b>{label}</b>\n"
+        f"Items updated: <b>{updated}</b> of {len(sel)} selected\n"
+        f"New price:     <b>{config.CURRENCY_SYMBOL}{price:g}</b>",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏷️ Select More", callback_data=f"adm_pricesel:{subl_id}"),
+            InlineKeyboardButton("📦 Stock List",  callback_data=f"adm_slist:{subl_id}"),
+        ]]),
         parse_mode="HTML",
     )
 
