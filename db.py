@@ -680,4 +680,3 @@ async def get_stats() -> dict:
             "pending_pays":  pending_pays,
             "total_orders":  total_orders,
         }
-        }
