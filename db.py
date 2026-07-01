@@ -148,6 +148,40 @@ def find_sublist_by_id(subl_id: str) -> dict | None:
     return None
 
 
+async def move_sublist(subl_id: str, direction: int) -> None:
+    """Move a sublist up (direction=-1) or down (direction=+1) within its category."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "SELECT id, cat_id, sort_order FROM sublists WHERE id=$1", subl_id
+        )
+        if not row:
+            return
+        cat_id, cur_order = row["cat_id"], row["sort_order"]
+        if direction < 0:
+            adjacent = await con.fetchrow(
+                "SELECT id, sort_order FROM sublists "
+                "WHERE cat_id=$1 AND sort_order < $2 ORDER BY sort_order DESC LIMIT 1",
+                cat_id, cur_order,
+            )
+        else:
+            adjacent = await con.fetchrow(
+                "SELECT id, sort_order FROM sublists "
+                "WHERE cat_id=$1 AND sort_order > $2 ORDER BY sort_order ASC LIMIT 1",
+                cat_id, cur_order,
+            )
+        if not adjacent:
+            return
+        await con.execute(
+            "UPDATE sublists SET sort_order=$1 WHERE id=$2",
+            adjacent["sort_order"], subl_id,
+        )
+        await con.execute(
+            "UPDATE sublists SET sort_order=$1 WHERE id=$2",
+            cur_order, adjacent["id"],
+        )
+    await _refresh_sublist_cache()
+
+
 async def add_sublist(subl_id: str, cat_id: str, label: str) -> bool:
     """Add a new sublist. Returns False if ID already exists."""
     try:
@@ -645,4 +679,5 @@ async def get_stats() -> dict:
             "total_revenue": total_revenue,
             "pending_pays":  pending_pays,
             "total_orders":  total_orders,
+        }
         }
