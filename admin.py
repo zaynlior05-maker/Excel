@@ -293,6 +293,33 @@ def stock_list_kb(subl_id: str, items: list) -> InlineKeyboardMarkup:
 PRICE_SEL_PER_PAGE = 10   # items per page in the admin price selector
 
 
+def reorder_kb(cat_id: str) -> InlineKeyboardMarkup:
+    """Show all bases with ⬆️⬇️ buttons to move them up or down."""
+    sublists = db.get_sublists(cat_id)
+    rows = []
+    for i, s in enumerate(sublists):
+        label = db.get_label(f"subl:{s['id']}", s["label"])
+        row   = []
+        # Up arrow (disabled at top)
+        row.append(InlineKeyboardButton(
+            "⬆️" if i > 0 else "  ",
+            callback_data=f"adm_moveup:{s['id']}:{cat_id}" if i > 0 else "noop",
+        ))
+        # Base name + position
+        row.append(InlineKeyboardButton(
+            f"{i + 1}. {label}",
+            callback_data="noop",
+        ))
+        # Down arrow (disabled at bottom)
+        row.append(InlineKeyboardButton(
+            "⬇️" if i < len(sublists) - 1 else "  ",
+            callback_data=f"adm_movedown:{s['id']}:{cat_id}" if i < len(sublists) - 1 else "noop",
+        ))
+        rows.append(row)
+    rows.append([InlineKeyboardButton("⬅️ Back to Stock", callback_data="adm_stock")])
+    return InlineKeyboardMarkup(rows)
+
+
 def price_select_kb(subl_id: str, items: list,
                     selected: set, page: int = 0) -> InlineKeyboardMarkup:
     """Paginated item list with ✅/☐ toggles for multi-select repricing."""
@@ -581,10 +608,47 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 f"➕ Add New Base to {cat['label']}",
                 callback_data=f"adm_addbase:{cat['id']}",
             )])
+            rows.append([InlineKeyboardButton(
+                f"↕️ Reorder {cat['label']} Bases",
+                callback_data=f"adm_reorder:{cat['id']}",
+            )])
         rows.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_menu")])
         await _safe_edit(query,
             "📦 <b>Stock Management</b>\n\nTap a base to manage it:",
             InlineKeyboardMarkup(rows))
+
+    elif data.startswith("adm_reorder:"):
+        cat_id = data.split(":", 1)[1]
+        cat    = next((c for c in config.CATEGORIES if c["id"] == cat_id), None)
+        label  = cat["label"] if cat else cat_id.upper()
+        sublists = db.get_sublists(cat_id)
+        await _safe_edit(query,
+            f"↕️ <b>Reorder Bases — {label}</b>\n\n"
+            f"Use ⬆️ ⬇️ to move bases up or down.\n"
+            f"Changes appear instantly in the store.",
+            reorder_kb(cat_id))
+
+    elif data.startswith("adm_moveup:"):
+        _, subl_id, cat_id = data.split(":", 2)
+        await db.move_sublist(subl_id, -1)
+        cat   = next((c for c in config.CATEGORIES if c["id"] == cat_id), None)
+        label = cat["label"] if cat else cat_id.upper()
+        await _safe_edit(query,
+            f"↕️ <b>Reorder Bases — {label}</b>\n\n"
+            f"Use ⬆️ ⬇️ to move bases up or down.\n"
+            f"Changes appear instantly in the store.",
+            reorder_kb(cat_id))
+
+    elif data.startswith("adm_movedown:"):
+        _, subl_id, cat_id = data.split(":", 2)
+        await db.move_sublist(subl_id, +1)
+        cat   = next((c for c in config.CATEGORIES if c["id"] == cat_id), None)
+        label = cat["label"] if cat else cat_id.upper()
+        await _safe_edit(query,
+            f"↕️ <b>Reorder Bases — {label}</b>\n\n"
+            f"Use ⬆️ ⬇️ to move bases up or down.\n"
+            f"Changes appear instantly in the store.",
+            reorder_kb(cat_id))
 
     elif data.startswith("adm_addbase:"):
         cat_id = data.split(":", 1)[1]
