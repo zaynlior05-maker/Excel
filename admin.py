@@ -281,12 +281,13 @@ def stock_list_kb(subl_id: str, items: list) -> InlineKeyboardMarkup:
         rows.append([
             InlineKeyboardButton(f"✏️ £ Set Price", callback_data=f"adm_itemprice:{it['id']}:{subl_id}"),
         ])
-    rows.append([InlineKeyboardButton("➕ Add Item",                 callback_data=f"adm_sadd:{subl_id}")])
-    rows.append([InlineKeyboardButton("📤 Upload File",              callback_data=f"adm_upload_prompt:{subl_id}")])
-    rows.append([InlineKeyboardButton("🏷️ Select Items to Reprice", callback_data=f"adm_pricesel:{subl_id}")])
-    rows.append([InlineKeyboardButton("💰 Change Price (All Items)", callback_data=f"adm_setprice:{subl_id}")])
-    rows.append([InlineKeyboardButton("🗑️ Delete This Base",        callback_data=f"adm_delbase_confirm:{subl_id}")])
-    rows.append([InlineKeyboardButton("⬅️ Back",                    callback_data="adm_stock")])
+    rows.append([InlineKeyboardButton("✏️ Rename This Base",          callback_data=f"adm_renamebase:{subl_id}")])
+    rows.append([InlineKeyboardButton("➕ Add Item",                   callback_data=f"adm_sadd:{subl_id}")])
+    rows.append([InlineKeyboardButton("📤 Upload File",                callback_data=f"adm_upload_prompt:{subl_id}")])
+    rows.append([InlineKeyboardButton("🏷️ Select Items to Reprice",   callback_data=f"adm_pricesel:{subl_id}")])
+    rows.append([InlineKeyboardButton("💰 Change Price (All Items)",   callback_data=f"adm_setprice:{subl_id}")])
+    rows.append([InlineKeyboardButton("🗑️ Delete This Base",          callback_data=f"adm_delbase_confirm:{subl_id}")])
+    rows.append([InlineKeyboardButton("⬅️ Back",                      callback_data="adm_stock")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -375,20 +376,42 @@ def labels_kb(overrides: dict) -> InlineKeyboardMarkup:
     One row per renameable label.
     Left button = current name (tap to edit).
     Right button = ↩️ Reset (only shown when overridden).
+    Includes all dynamic bases from the DB, not just config.RENAMEABLE.
     """
     rows = []
+
+    # ── Static labels from config ──
     for key, default in config.RENAMEABLE.items():
-        current     = overrides.get(key, default)
-        overridden  = key in overrides
-        edit_btn    = InlineKeyboardButton(
+        # Skip subl: keys here — we'll show dynamic ones from DB below
+        if key.startswith("subl:"):
+            continue
+        current    = overrides.get(key, default)
+        overridden = key in overrides
+        edit_btn   = InlineKeyboardButton(
             f"{'🔄 ' if overridden else ''}{current}",
             callback_data=f"adm_label_edit:{key}",
         )
         if overridden:
-            reset_btn = InlineKeyboardButton("↩️", callback_data=f"adm_label_reset:{key}")
-            rows.append([edit_btn, reset_btn])
+            rows.append([edit_btn, InlineKeyboardButton("↩️", callback_data=f"adm_label_reset:{key}")])
         else:
             rows.append([edit_btn])
+
+    # ── Dynamic base labels from DB ──
+    rows.append([InlineKeyboardButton("── Bases ──", callback_data="noop")])
+    for s in db.get_all_sublists():
+        key        = f"subl:{s['id']}"
+        default    = s["label"]
+        current    = overrides.get(key, default)
+        overridden = key in overrides
+        edit_btn   = InlineKeyboardButton(
+            f"{'🔄 ' if overridden else ''}✏️ {current}",
+            callback_data=f"adm_label_edit:{key}",
+        )
+        if overridden:
+            rows.append([edit_btn, InlineKeyboardButton("↩️", callback_data=f"adm_label_reset:{key}")])
+        else:
+            rows.append([edit_btn])
+
     rows.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_menu")])
     return InlineKeyboardMarkup(rows)
 
@@ -649,6 +672,20 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"Use ⬆️ ⬇️ to move bases up or down.\n"
             f"Changes appear instantly in the store.",
             reorder_kb(cat_id))
+
+    elif data.startswith("adm_renamebase:"):
+        subl_id = data.split(":", 1)[1]
+        current = _subl_label(subl_id)
+        context.user_data["adm_awaiting"]        = "rename_base"
+        context.user_data["adm_rename_subl"]     = subl_id
+        await _safe_edit(query,
+            f"✏️ <b>Rename Base</b>\n\n"
+            f"Base:    <code>{subl_id}</code>\n"
+            f"Current: <b>{current}</b>\n\n"
+            "Send the new display name.\nYou can include emojis e.g. <code>🔸 28th Base</code>",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data=f"adm_slist:{subl_id}")
+            ]]))
 
     elif data.startswith("adm_addbase:"):
         cat_id = data.split(":", 1)[1]
@@ -1220,6 +1257,8 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if awaiting == "add_item":
         await _handle_add_item(update, context)
+    elif awaiting == "rename_base":
+        await _handle_rename_base(update, context)
     elif awaiting == "add_base_id":
         await _handle_add_base_id(update, context)
     elif awaiting == "add_base_label":
@@ -1408,6 +1447,33 @@ async def _handle_item_price(update, context) -> None:
         )
     else:
         await update.message.reply_text("❌ Item not found or already sold.")
+
+
+async def _handle_rename_base(update, context) -> None:
+    subl_id = context.user_data.pop("adm_rename_subl", "")
+    context.user_data["adm_awaiting"] = None
+    new_name = update.message.text.strip()
+    if not new_name or len(new_name) > 64:
+        await update.message.reply_text("❌ Name must be 1–64 characters.")
+        return
+    old_name = _subl_label(subl_id)
+    # Update both: the label override table AND the sublists table label column
+    await db.set_label(f"subl:{subl_id}", new_name)
+    async with db._pool.acquire() as con:
+        await con.execute(
+            "UPDATE sublists SET label=$1 WHERE id=$2", new_name, subl_id
+        )
+    await db._refresh_sublist_cache()
+    await update.message.reply_text(
+        f"✅ <b>Base Renamed</b>\n\n"
+        f"Before: <i>{old_name}</i>\n"
+        f"After:  <b>{new_name}</b>\n\n"
+        "Live immediately in the store.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("📦 Back to Stock", callback_data=f"adm_slist:{subl_id}")
+        ]]),
+        parse_mode="HTML",
+    )
 
 
 async def _handle_add_base_id(update, context) -> None:
