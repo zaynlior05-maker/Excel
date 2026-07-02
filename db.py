@@ -85,9 +85,7 @@ async def init() -> None:
         """)
     await _seed_stock()
     await _load_label_cache()
-    await _seed_sublists()
-    await _refresh_sublist_cache()
-    # Add username column and locked column if this is an existing database
+    # Run migrations BEFORE loading caches that depend on new columns
     async with _pool.acquire() as con:
         await con.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT NOT NULL DEFAULT ''"
@@ -95,6 +93,8 @@ async def init() -> None:
         await con.execute(
             "ALTER TABLE sublists ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE"
         )
+    await _seed_sublists()
+    await _refresh_sublist_cache()
 
 
 # ============================================================
