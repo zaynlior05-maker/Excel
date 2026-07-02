@@ -3,6 +3,7 @@ Log channel — pushes every bot event to your private Telegram channel.
 All events now show both user ID and @username.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -27,33 +28,45 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%d/%m %H:%M UTC")
 
 
+_username_cache: dict[int, str] = {}   # user_id → @username, in-memory
+
+
 async def _tag(user_id: int) -> str:
-    """Return 'ID (@username)' or just 'ID' if no username stored."""
-    try:
-        import db as _db
-        uname = await _db.get_username(user_id)
-        if uname:
-            return f"<code>{user_id}</code> (@{uname})"
-    except Exception:
-        pass
-    return f"<code>{user_id}</code>"
+    """Return 'ID (@username)' — username is cached after first lookup."""
+    if user_id not in _username_cache:
+        try:
+            import db as _db
+            uname = await _db.get_username(user_id)
+            _username_cache[user_id] = uname or ""
+        except Exception:
+            _username_cache[user_id] = ""
+    uname = _username_cache.get(user_id, "")
+    return f"<code>{user_id}</code> (@{uname})" if uname else f"<code>{user_id}</code>"
 
 
-async def log(text: str) -> None:
-    if not _bot:
-        logger.warning("channel_log: bot not initialised")
-        return
-    if not config.LOG_CHANNEL_ID:
-        return
+async def _do_send(text: str) -> None:
+    """Internal: actually send to log channel. Called as a background task."""
     try:
         await _bot.send_message(config.LOG_CHANNEL_ID, text, parse_mode="HTML")
     except Exception as e:
-        logger.error("channel_log send error → %s: %s", config.LOG_CHANNEL_ID, e)
+        logger.error("channel_log: %s", e)
+
+
+async def log(text: str) -> None:
+    """
+    Fire-and-forget log — returns IMMEDIATELY so it never blocks button responses.
+    The message is sent in the background via asyncio.create_task().
+    """
+    if not _bot or not config.LOG_CHANNEL_ID:
+        return
+    asyncio.create_task(_do_send(text))
 
 
 # ── Events ─────────────────────────────────────────────────────────────────
 
 async def user_start(user_id: int, username: str, is_new: bool) -> None:
+    # Update cache with fresh username
+    _username_cache[user_id] = username or ""
     icon = "🆕" if is_new else "👋"
     tag  = f"@{username}" if username else "no username"
     await log(
@@ -64,11 +77,9 @@ async def user_start(user_id: int, username: str, is_new: bool) -> None:
 
 
 async def nav_event(user_id: int, page: str, detail: str = "") -> None:
-    line = f"📍 <b>{page}</b>"
-    if detail:
-        line += f" — {detail}"
-    tag = await _tag(user_id)
-    await log(f"{line}\nUser: {tag}\n🕐 {_now()}")
+    # Nav events are very high frequency — skip logging to keep the bot fast.
+    # Only log meaningful events (purchases, payments, logins).
+    pass
 
 
 async def bin_search(user_id: int, bin_digits: str, found: int, subl_id: str = "") -> None:
