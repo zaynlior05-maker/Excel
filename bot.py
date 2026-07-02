@@ -57,16 +57,20 @@ logger = logging.getLogger(__name__)
 # ============================================================
 #  Text + keyboards
 # ============================================================
+_DEFAULT_WELCOME = (
+    "🛍️ <b>Welcome to the Store!</b>\n\n"
+    "Use the menu below to get started. 👇"
+)
+
+
 def welcome_text() -> str:
-    return (
-        f"\U0001F539 Support account is available 24/7 {config.SUPPORT_HANDLE}\n"
-        "\U0001F539\n"
-        "\U0001F539 <b>BY PURCHASING YOU AGREE TO THESE RULES. "
-        "FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. "
-        "WE SHALL GIVE NO WARNINGS</b>\n\n"
-        "Welcome to the Store \U0001F44B\n"
-        "Use the menu below to interact with the bot \U0001F916"
-    )
+    """Reads from the labels DB — change it from /admin → Labels → Welcome Message."""
+    return db.get_label("welcome_text", _DEFAULT_WELCOME)
+
+
+def _txt(key: str, default: str) -> str:
+    """Read a configurable UI text from the labels DB."""
+    return db.get_label(key, default)
 
 
 def _tg_url(https_url: str) -> str:
@@ -357,9 +361,7 @@ async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     u = update.effective_user
     await db.ensure_user(u.id, u.username or "")
     await update.message.reply_text(
-        "\U0001F6D2 <b>Store</b>\n"
-        "<code>──────────────────────</code>\n"
-        "Choose a category:",
+        f"\U0001F6D2 <b>Store</b>\n<code>──────────────────────</code>\n{_txt('store_cat_text', 'Choose a category:')}",
         reply_markup=store_menu(),
         parse_mode="HTML",
     )
@@ -369,9 +371,7 @@ async def cmd_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     u = update.effective_user
     await db.ensure_user(u.id, u.username or "")
     await update.message.reply_text(
-        "\U0001F6D2 <b>Store</b>\n"
-        "<code>──────────────────────</code>\n"
-        "Choose a category:",
+        f"\U0001F6D2 <b>Store</b>\n<code>──────────────────────</code>\n{_txt('store_cat_text', 'Choose a category:')}",
         reply_markup=store_menu(),
         parse_mode="HTML",
     )
@@ -631,9 +631,7 @@ async def _route_button(query, data: str, uid: int,
         await channel_log.nav_event(uid, "Store")
         await safe_edit(
             query,
-            "\U0001F6D2 <b>Store</b>\n"
-            "<code>──────────────────────</code>\n"
-            "Choose a category:",
+            f"\U0001F6D2 <b>Store</b>\n<code>──────────────────────</code>\n{_txt('store_cat_text', 'Choose a category:')}",
             store_menu(),
         )
 
@@ -651,9 +649,7 @@ async def _route_button(query, data: str, uid: int,
             return
         await safe_edit(
             query,
-            f"{cat_label}\n"
-            "<code>──────────────────────</code>\n"
-            "Select a list:",
+            f"{cat_label}\n<code>──────────────────────</code>\n{_txt('store_subl_text', 'Select a list:')}",
             sublist_menu(cat),
         )
 
@@ -687,7 +683,7 @@ async def _route_button(query, data: str, uid: int,
                 sublist_back_menu(cat_id))
             return
         await safe_edit(query,
-            f"{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
+            f"{subl_label}\n<code>──────────────────────</code>\n{_txt("store_items_text", "Tap items to add to cart:")}",
             lines_menu(cat_id, subl_id, items, page=0, cart=cart))
 
     elif data.startswith("page:"):
@@ -703,7 +699,7 @@ async def _route_button(query, data: str, uid: int,
         cart  = context.user_data.get("cart", {})
         context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": page}
         await safe_edit(query,
-            f"{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
+            f"{subl_label}\n<code>──────────────────────</code>\n{_txt("store_items_text", "Tap items to add to cart:")}",
             lines_menu(cat_id, subl_id, items, page=page, cart=cart))
 
     elif data.startswith("refresh:"):
@@ -723,7 +719,7 @@ async def _route_button(query, data: str, uid: int,
                 sublist_back_menu(cat_id))
             return
         await safe_edit(query,
-            f"{banner}{subl_label}\n<code>──────────────────────</code>\nTap to select/deselect{note}:",
+            f"{banner}{subl_label}\n<code>──────────────────────</code>\n{_txt("store_select_text", "Tap to select/deselect")}{note}:",
             lines_menu(cat_id, subl_id, items, page=0, cart=cart))
 
     elif data.startswith("sel:"):
@@ -745,7 +741,7 @@ async def _route_button(query, data: str, uid: int,
                 subl  = find_sublist(find_category(cat_id), subl_id)
                 subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
                 await safe_edit(query,
-                    f"{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
+                    f"{subl_label}\n<code>──────────────────────</code>\n{_txt("store_items_text", "Tap items to add to cart:")}",
                     lines_menu(cat_id, subl_id, items, page=page, cart=cart))
                 return
             cart[item_id] = subl_id
@@ -756,7 +752,7 @@ async def _route_button(query, data: str, uid: int,
         count = len(cart)
         note  = f" · 🛒 <b>{count}</b> in cart" if count else ""
         await safe_edit(query,
-            f"{subl_label}\n<code>──────────────────────</code>\nTap to select/deselect{note}:",
+            f"{subl_label}\n<code>──────────────────────</code>\n{_txt("store_select_text", "Tap to select/deselect")}{note}:",
             lines_menu(cat_id, subl_id, items, page=page, cart=cart))
 
     elif data.startswith("cart_checkout:"):
@@ -778,7 +774,7 @@ async def _route_button(query, data: str, uid: int,
             subl  = find_sublist(find_category(cat_id), subl_id)
             subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
             await safe_edit(query,
-                f"❌ All items sold\n\n{subl_label}\n<code>──────────────────────</code>\nTap items to add to cart:",
+                f"❌ All items sold\n\n{subl_label}\n<code>──────────────────────</code>\n{_txt("store_items_text", "Tap items to add to cart:")}",
                 lines_menu(cat_id, subl_id, items, page=int(page_s), cart={}))
             return
         total = sum(Decimal(str(it["price"])) for it in selected)
