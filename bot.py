@@ -59,11 +59,13 @@ logger = logging.getLogger(__name__)
 # ============================================================
 def welcome_text() -> str:
     return (
-        "Welcome to EXCEL Store 👋\n"
-        "Use the menu below to interact with the bot 🤖\n"
-        "===============\n"
-        "Managed by @EXCELV1\n"
-        "Coded by @EXCELV1 on session 05a5c62989edb4dadf7cb1274e35e37d498b5af459b04e08fe08ab037a206ec841"
+        f"\U0001F539 Support account is available 24/7 {config.SUPPORT_HANDLE}\n"
+        "\U0001F539\n"
+        "\U0001F539 <b>BY PURCHASING YOU AGREE TO THESE RULES. "
+        "FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. "
+        "WE SHALL GIVE NO WARNINGS</b>\n\n"
+        "Welcome to the Store \U0001F44B\n"
+        "Use the menu below to interact with the bot \U0001F916"
     )
 
 
@@ -648,6 +650,18 @@ async def _route_button(query, data: str, uid: int,
         subl = find_sublist(cat, subl_id)
         if not subl:
             await safe_edit(query, "List not found.", store_menu())
+            return
+        # Locked base — show locked message to user
+        if db.is_sublist_locked(subl_id):
+            subl_label = db.get_label(f"subl:{subl_id}", subl["label"])
+            await safe_edit(
+                query,
+                f"Database Locked 🔒",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("◄ Previous Menu", callback_data=f"cat:{cat_id}")],
+                    [InlineKeyboardButton("🌏 Main Menu",    callback_data="menu")],
+                ]),
+            )
             return
         subl_label = db.get_label(f"subl:{subl_id}", subl["label"])
         await channel_log.nav_event(uid, "Sublist", subl_label)
