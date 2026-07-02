@@ -1496,8 +1496,8 @@ async def _handle_rename_base(update, context) -> None:
     subl_id = context.user_data.pop("adm_rename_subl", "")
     context.user_data["adm_awaiting"] = None
     new_name = update.message.text.strip()
-    if not new_name or len(new_name) > 64:
-        await update.message.reply_text("❌ Name must be 1–64 characters.")
+    if not new_name:
+        await update.message.reply_text("❌ Name cannot be empty.")
         return
     old_name = _subl_label(subl_id)
     # Update both: the label override table AND the sublists table label column
@@ -1560,8 +1560,8 @@ async def _handle_add_base_label(update, context) -> None:
     subl_id = context.user_data.get("adm_base_id", "")
     context.user_data["adm_awaiting"] = None
 
-    if not label or len(label) > 64:
-        await update.message.reply_text("❌ Name must be 1–64 characters. Try again:")
+    if not label:
+        await update.message.reply_text("❌ Name cannot be empty. Try again:")
         context.user_data["adm_awaiting"] = "add_base_label"
         return
 
@@ -1864,9 +1864,7 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    if len(new_value) > 64:
-        await update.message.reply_text("Name too long (max 64 characters).")
-        return
+
 
     old_value = db.get_label(key, config.default_label(key))
     await db.set_label(key, new_value)
@@ -2174,9 +2172,7 @@ async def cmd_testlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
-    if len(new_value) > 64:
-        await update.message.reply_text("Name too long (max 64 characters).")
-        return
+
 
     old_value = db.get_label(key, config.default_label(key))
     await db.set_label(key, new_value)
@@ -2215,9 +2211,7 @@ async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"Please provide the new name.\nExample: <code>/rename {key} 🔸 New Name</code>",
             parse_mode="HTML")
         return
-    if len(new_value) > 64:
-        await update.message.reply_text("Name too long (max 64 characters).")
-        return
+
     old_value = db.get_label(key, config.default_label(key))
     await db.set_label(key, new_value)
     await update.message.reply_text(
