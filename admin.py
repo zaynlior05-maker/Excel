@@ -2328,7 +2328,7 @@ def register_admin_handlers(app: Application) -> None:
     # All adm_ callbacks — must run BEFORE the general on_button handler
     app.add_handler(CallbackQueryHandler(
         adm_button, pattern=r"^adm_"
-    ))
+    )) 
 
     # File uploads from admin — group 1 so it never blocks user messages in group 0
     app.add_handler(MessageHandler(
