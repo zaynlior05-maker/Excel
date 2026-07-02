@@ -272,15 +272,16 @@ def stock_overview_kb(counts: dict) -> InlineKeyboardMarkup:
 
 
 def stock_list_kb(subl_id: str, items: list) -> InlineKeyboardMarkup:
-    rows = []
-    for it in items[:30]:   # show up to 30 in admin stock view
+    rows   = []
+    locked = db.is_sublist_locked(subl_id)
+    for it in items[:30]:
         label = f"{it['bin']} - {it['year']} - {it['code']} - {config.CURRENCY_SYMBOL}{float(it['price']):g}"
-        rows.append([
-            InlineKeyboardButton(f"❌ {label}", callback_data=f"adm_sdel:{it['id']}"),
-        ])
-        rows.append([
-            InlineKeyboardButton(f"✏️ £ Set Price", callback_data=f"adm_itemprice:{it['id']}:{subl_id}"),
-        ])
+        rows.append([InlineKeyboardButton(f"❌ {label}",      callback_data=f"adm_sdel:{it['id']}")])
+        rows.append([InlineKeyboardButton("✏️ £ Set Price",   callback_data=f"adm_itemprice:{it['id']}:{subl_id}")])
+    if locked:
+        rows.append([InlineKeyboardButton("🔓 Unlock Base  (currently locked)", callback_data=f"adm_unlockbase:{subl_id}")])
+    else:
+        rows.append([InlineKeyboardButton("🔒 Lock Base",                        callback_data=f"adm_lockbase:{subl_id}")])
     rows.append([InlineKeyboardButton("✏️ Rename This Base",          callback_data=f"adm_renamebase:{subl_id}")])
     rows.append([InlineKeyboardButton("➕ Add Item",                   callback_data=f"adm_sadd:{subl_id}")])
     rows.append([InlineKeyboardButton("📤 Upload File",                callback_data=f"adm_upload_prompt:{subl_id}")])
@@ -672,6 +673,27 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"Use ⬆️ ⬇️ to move bases up or down.\n"
             f"Changes appear instantly in the store.",
             reorder_kb(cat_id))
+
+    elif data.startswith("adm_lockbase:"):
+        subl_id = data.split(":", 1)[1]
+        await db.set_sublist_locked(subl_id, True)
+        label = _subl_label(subl_id)
+        items = await db.get_stock(subl_id)
+        await _safe_edit(query,
+            f"🔒 <b>{label}</b> is now <b>locked</b>.\n\n"
+            "Users who tap this base will see:\n"
+            "<i>Database Locked 🔒</i>",
+            stock_list_kb(subl_id, items))
+
+    elif data.startswith("adm_unlockbase:"):
+        subl_id = data.split(":", 1)[1]
+        await db.set_sublist_locked(subl_id, False)
+        label = _subl_label(subl_id)
+        items = await db.get_stock(subl_id)
+        await _safe_edit(query,
+            f"🔓 <b>{label}</b> is now <b>unlocked</b>.\n\n"
+            "Users can browse this base normally.",
+            stock_list_kb(subl_id, items))
 
     elif data.startswith("adm_renamebase:"):
         subl_id = data.split(":", 1)[1]
