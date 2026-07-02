@@ -379,7 +379,8 @@ def labels_kb(overrides: dict) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("── Bot Texts ──", callback_data="noop")])
     for key, display in [
         ("welcome_text",     "✏️ Welcome Message"),
-        ("rules_text",       "✏️ Rules Text"),
+        ("refund_text",      "✏️ Refund Policy (shown on /start)"),
+        ("rules_text",       "✏️ Rules Text (shown on Rules button)"),
         ("store_cat_text",   "✏️ Store: 'Choose a category'"),
         ("store_subl_text",  "✏️ Store: 'Select a list'"),
         ("store_items_text", "✏️ Store: 'Tap items to add to cart'"),
@@ -1219,7 +1220,7 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         current = db.get_label(key, default)
         context.user_data["adm_awaiting"]   = "label_edit"
         context.user_data["adm_label_key"]  = key
-        long_text_keys = {"welcome_text", "rules_text", "store_cat_text", "store_subl_text", "store_items_text", "store_select_text"}
+        long_text_keys = {"welcome_text", "refund_text", "rules_text", "store_cat_text", "store_subl_text", "store_items_text", "store_select_text"}
         if key in long_text_keys:
             hint = (
                 f"🏷️ <b>Edit: {key}</b>\n\n"
@@ -1711,7 +1712,7 @@ async def _handle_label_edit(update, context) -> None:
         await update.message.reply_text("Name cannot be empty. No changes made.")
         return
     # Long-text keys (welcome message, rules) have no length limit
-    long_text_keys = {"welcome_text", "rules_text", "store_cat_text", "store_subl_text", "store_items_text", "store_select_text"}
+    long_text_keys = {"welcome_text", "refund_text", "rules_text", "store_cat_text", "store_subl_text", "store_items_text", "store_select_text"}
     if key not in long_text_keys and len(new_value) > 64:
         await update.message.reply_text(
             "⚠️ Button labels must be under 64 characters.\n"
