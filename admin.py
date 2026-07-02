@@ -378,8 +378,11 @@ def labels_kb(overrides: dict) -> InlineKeyboardMarkup:
     # ── Editable bot texts ──
     rows.append([InlineKeyboardButton("── Bot Texts ──", callback_data="noop")])
     for key, display in [
-        ("welcome_text", "✏️ Welcome Message"),
-        ("rules_text",   "✏️ Rules Text"),
+        ("welcome_text",     "✏️ Welcome Message"),
+        ("rules_text",       "✏️ Rules Text"),
+        ("store_cat_text",   "✏️ Store: 'Choose a category'"),
+        ("store_subl_text",  "✏️ Store: 'Select a list'"),
+        ("store_items_text", "✏️ Store: 'Tap items to add to cart'"),
     ]:
         label = f"🔄 {display}" if key in overrides else display
         rows.append([InlineKeyboardButton(label, callback_data=f"adm_label_edit:{key}")])
@@ -1216,14 +1219,28 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         current = db.get_label(key, default)
         context.user_data["adm_awaiting"]   = "label_edit"
         context.user_data["adm_label_key"]  = key
+        long_text_keys = {"welcome_text", "rules_text", "store_cat_text", "store_subl_text", "store_items_text", "store_select_text"}
+        if key in long_text_keys:
+            hint = (
+                f"🏷️ <b>Edit: {key}</b>\n\n"
+                "Send your new text now.\n"
+                "✅ Multi-line supported\n"
+                "✅ Emojis supported\n"
+                "✅ HTML bold: <code>&lt;b&gt;text&lt;/b&gt;</code>\n"
+                "✅ HTML italic: <code>&lt;i&gt;text&lt;/i&gt;</code>\n\n"
+                f"Current:\n<i>{current[:200]}{'...' if len(current) > 200 else ''}</i>"
+            )
+        else:
+            hint = (
+                f"🏷️ <b>Rename Label</b>\n\n"
+                f"Key: <code>{key}</code>\n"
+                f"Current: <b>{current}</b>\n"
+                f"Default: <i>{default}</i>\n\n"
+                "Send the new display name now.\n"
+                "You can use emojis — e.g. <code>🗂️ Fresh Files</code>"
+            )
         await _safe_edit(
-            query,
-            f"🏷️ <b>Rename Label</b>\n\n"
-            f"Key: <code>{key}</code>\n"
-            f"Current: <b>{current}</b>\n"
-            f"Default: <i>{default}</i>\n\n"
-            "Send the new display name now.\n"
-            "You can use emojis — e.g. <code>🗂️ Fresh Files</code>",
+            query, hint,
             InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Cancel", callback_data="adm_labels")
             ]]),
@@ -1693,19 +1710,30 @@ async def _handle_label_edit(update, context) -> None:
     if not new_value:
         await update.message.reply_text("Name cannot be empty. No changes made.")
         return
-    if len(new_value) > 64:
-        await update.message.reply_text("Name too long (max 64 characters). Try again.")
+    # Long-text keys (welcome message, rules) have no length limit
+    long_text_keys = {"welcome_text", "rules_text", "store_cat_text", "store_subl_text", "store_items_text", "store_select_text"}
+    if key not in long_text_keys and len(new_value) > 64:
+        await update.message.reply_text(
+            "⚠️ Button labels must be under 64 characters.\n"
+            f"Your text was {len(new_value)} characters. Try a shorter name.",
+        )
         context.user_data["adm_awaiting"]  = "label_edit"
         context.user_data["adm_label_key"] = key
         return
     await db.set_label(key, new_value)
     overrides = await db.get_all_label_overrides()
-    await update.message.reply_text(
-        f"✅ <b>{key}</b> renamed to: <b>{new_value}</b>\n\n"
-        "The change is live instantly — users will see it on their next tap.",
-        reply_markup=labels_kb(overrides),
-        parse_mode="HTML",
-    )
+    if key in long_text_keys:
+        await update.message.reply_text(
+            f"✅ <b>{key}</b> updated!\n\nThe change is live instantly.",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            f"✅ <b>{key}</b> renamed to: <b>{new_value}</b>\n\n"
+            "The change is live instantly — users will see it on their next tap.",
+            reply_markup=labels_kb(overrides),
+            parse_mode="HTML",
+        )
 
 
 # ============================================================
@@ -2328,7 +2356,7 @@ def register_admin_handlers(app: Application) -> None:
     # All adm_ callbacks — must run BEFORE the general on_button handler
     app.add_handler(CallbackQueryHandler(
         adm_button, pattern=r"^adm_"
-    )) 
+    ))
 
     # File uploads from admin — group 1 so it never blocks user messages in group 0
     app.add_handler(MessageHandler(
