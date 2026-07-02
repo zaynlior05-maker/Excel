@@ -377,14 +377,33 @@ async def cmd_store(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def _wallet_text(uid: int) -> str:
+    """Build the wallet/profile card shown in the wallet section."""
+    info = await db.get_user_info(uid)
+    bal  = await db.get_balance(uid)
+    bal_str = f"{config.CURRENCY_SYMBOL}{bal:.2f}"
+    if info and info.get("joined"):
+        join_date = info["joined"].strftime("%m-%d-%Y")
+    else:
+        join_date = "—"
+    return (
+        "<code>============================</code>\n"
+        f"🪪 <b>ID:</b> <code>{uid}</code>\n"
+        f"💰 <b>Balance:</b> <b>{bal_str}</b>\n"
+        f"📅 <b>Join Date:</b> {join_date}\n"
+        "<code>============================</code>"
+    )
+
+
 async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     u   = update.effective_user
     uid = u.id
     await db.ensure_user(uid, u.username or "")
-    bal = await db.get_balance(uid)
+    bal     = await db.get_balance(uid)
     bal_str = f"{config.CURRENCY_SYMBOL}{bal:.2f}"
+    text    = await _wallet_text(uid)
     await update.message.reply_text(
-        f"\U0001F4B5 <b>Wallet</b>\n\nYour balance: <b>{bal_str}</b>",
+        text,
         reply_markup=wallet_menu(bal_str),
         parse_mode="HTML",
     )
@@ -866,14 +885,10 @@ async def _route_button(query, data: str, uid: int,
 
     elif data == "wallet":
         await db.ensure_user(uid, query.from_user.username or "")
-        bal = await db.get_balance(uid)
+        text    = await _wallet_text(uid)
+        bal     = await db.get_balance(uid)
         bal_str = f"{config.CURRENCY_SYMBOL}{bal:.2f}"
-        await channel_log.nav_event(uid, "Wallet", f"balance {bal_str}")
-        await safe_edit(
-            query,
-            f"\U0001F4B5 <b>Wallet</b>\n\nYour balance: <b>{bal_str}</b>",
-            wallet_menu(bal_str),
-        )
+        await safe_edit(query, text, wallet_menu(bal_str))
 
     elif data == "topup":
         context.user_data["awaiting"] = None
