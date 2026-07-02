@@ -87,10 +87,13 @@ async def init() -> None:
     await _load_label_cache()
     await _seed_sublists()
     await _refresh_sublist_cache()
-    # Add username column if this is an existing database that predates it
+    # Add username column and locked column if this is an existing database
     async with _pool.acquire() as con:
         await con.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT NOT NULL DEFAULT ''"
+        )
+        await con.execute(
+            "ALTER TABLE sublists ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE"
         )
 
 
@@ -115,14 +118,17 @@ async def _refresh_sublist_cache() -> None:
     global _sublist_cache
     async with _pool.acquire() as con:
         rows = await con.fetch(
-            "SELECT id,cat_id,label FROM sublists ORDER BY cat_id,sort_order,id"
+            "SELECT id,cat_id,label,locked FROM sublists ORDER BY cat_id,sort_order,id"
         )
     cache: dict[str, list[dict]] = {}
     for r in rows:
         cat_id = r["cat_id"]
-        cache.setdefault(cat_id, []).append(
-            {"id": r["id"], "cat_id": r["cat_id"], "label": r["label"]}
-        )
+        cache.setdefault(cat_id, []).append({
+            "id":     r["id"],
+            "cat_id": r["cat_id"],
+            "label":  r["label"],
+            "locked": r["locked"],
+        })
     _sublist_cache = cache
 
 
@@ -178,6 +184,20 @@ async def move_sublist(subl_id: str, direction: int) -> None:
         await con.execute(
             "UPDATE sublists SET sort_order=$1 WHERE id=$2",
             cur_order, adjacent["id"],
+        )
+    await _refresh_sublist_cache()
+
+
+def is_sublist_locked(subl_id: str) -> bool:
+    """Synchronous — reads from cache."""
+    s = find_sublist_by_id(subl_id)
+    return bool(s.get("locked", False)) if s else False
+
+
+async def set_sublist_locked(subl_id: str, locked: bool) -> None:
+    async with _pool.acquire() as con:
+        await con.execute(
+            "UPDATE sublists SET locked=$1 WHERE id=$2", locked, subl_id
         )
     await _refresh_sublist_cache()
 
