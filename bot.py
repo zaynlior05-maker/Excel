@@ -392,7 +392,7 @@ async def cmd_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        config.RULES_TEXT,
+        db.get_label("rules_text", config.RULES_TEXT),
         reply_markup=back_menu(),
         parse_mode="HTML",
     )
