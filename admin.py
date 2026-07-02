@@ -373,23 +373,26 @@ def upload_list_picker_kb() -> InlineKeyboardMarkup:
 
 
 def labels_kb(overrides: dict) -> InlineKeyboardMarkup:
-    """
-    One row per renameable label.
-    Left button = current name (tap to edit).
-    Right button = ↩️ Reset (only shown when overridden).
-    Includes all dynamic bases from the DB, not just config.RENAMEABLE.
-    """
     rows = []
 
-    # ── Static labels from config ──
+    # ── Editable bot texts ──
+    rows.append([InlineKeyboardButton("── Bot Texts ──", callback_data="noop")])
+    for key, display in [
+        ("welcome_text", "✏️ Welcome Message"),
+        ("rules_text",   "✏️ Rules Text"),
+    ]:
+        label = f"🔄 {display}" if key in overrides else display
+        rows.append([InlineKeyboardButton(label, callback_data=f"adm_label_edit:{key}")])
+
+    # ── Static menu button labels ──
+    rows.append([InlineKeyboardButton("── Menu Buttons ──", callback_data="noop")])
     for key, default in config.RENAMEABLE.items():
-        # Skip subl: keys here — we'll show dynamic ones from DB below
         if key.startswith("subl:"):
             continue
         current    = overrides.get(key, default)
         overridden = key in overrides
         edit_btn   = InlineKeyboardButton(
-            f"{'🔄 ' if overridden else ''}{current}",
+            f"{'🔄 ' if overridden else ''}✏️ {current}",
             callback_data=f"adm_label_edit:{key}",
         )
         if overridden:
@@ -397,7 +400,7 @@ def labels_kb(overrides: dict) -> InlineKeyboardMarkup:
         else:
             rows.append([edit_btn])
 
-    # ── Dynamic base labels from DB ──
+    # ── Dynamic base labels ──
     rows.append([InlineKeyboardButton("── Bases ──", callback_data="noop")])
     for s in db.get_all_sublists():
         key        = f"subl:{s['id']}"
