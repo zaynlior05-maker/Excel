@@ -1711,28 +1711,28 @@ async def _handle_label_edit(update, context) -> None:
     if not new_value:
         await update.message.reply_text("Name cannot be empty. No changes made.")
         return
-    # Long-text keys (welcome message, rules) have no length limit
-    long_text_keys = {"welcome_text", "refund_text", "rules_text", "store_cat_text", "store_subl_text", "store_items_text", "store_select_text"}
-    if key not in long_text_keys and len(new_value) > 64:
+    # Only button labels (menu:, cat:, subl:) have a 64-char limit
+    # Everything else (text content, rules, welcome) has NO limit
+    is_button = any(key.startswith(p) for p in ("menu:", "cat:", "subl:"))
+    if is_button and len(new_value) > 64:
         await update.message.reply_text(
-            "⚠️ Button labels must be under 64 characters.\n"
+            f"⚠️ Button labels must be under 64 characters.\n"
             f"Your text was {len(new_value)} characters. Try a shorter name.",
         )
         context.user_data["adm_awaiting"]  = "label_edit"
         context.user_data["adm_label_key"] = key
         return
     await db.set_label(key, new_value)
-    overrides = await db.get_all_label_overrides()
-    if key in long_text_keys:
+    if is_button:
+        overrides = await db.get_all_label_overrides()
         await update.message.reply_text(
-            f"✅ <b>{key}</b> updated!\n\nThe change is live instantly.",
+            f"✅ <b>{key}</b> renamed to: <b>{new_value}</b>\n\nLive immediately.",
+            reply_markup=labels_kb(overrides),
             parse_mode="HTML",
         )
     else:
         await update.message.reply_text(
-            f"✅ <b>{key}</b> renamed to: <b>{new_value}</b>\n\n"
-            "The change is live instantly — users will see it on their next tap.",
-            reply_markup=labels_kb(overrides),
+            f"✅ Updated! Live immediately.",
             parse_mode="HTML",
         )
 
