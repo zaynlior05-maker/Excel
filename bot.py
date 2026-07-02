@@ -324,14 +324,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # 1 — Refund policy (wrapped so bad HTML never kills /start)
     try:
+        refund = db.get_label("refund_text", config.REFUND_RULES_TEXT)
         await update.message.reply_text(
-            config.REFUND_RULES_TEXT,
+            refund,
             reply_markup=ReplyKeyboardRemove(),
             parse_mode="HTML",
         )
     except Exception as e:
         logger.error("start: refund rules send error: %s", e)
-        # Fallback — send plain text version
         await update.message.reply_text(
             "📋 Please read our refund policy and rules before purchasing.",
             reply_markup=ReplyKeyboardRemove(),
@@ -624,8 +624,7 @@ async def _route_button(query, data: str, uid: int,
             )
 
     elif data == "rules":
-        await channel_log.nav_event(uid, "Rules")
-        await safe_edit(query, config.RULES_TEXT, back_menu())
+        await safe_edit(query, db.get_label("rules_text", config.RULES_TEXT), back_menu())
 
     elif data == "store":
         await channel_log.nav_event(uid, "Store")
