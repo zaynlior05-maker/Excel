@@ -57,47 +57,53 @@ logger = logging.getLogger(__name__)
 # ============================================================
 #  Text + keyboards
 # ============================================================
-def Welcome_text() -> str:
+def welcome_text() -> str:
     return (
-        "Welcome to EXCEL Store 👋\n"
-        "Use the menu below to interact with the bot 🤖\n"
-        "===============\n"
-        "Managed by @EXCELV1\n"
-        "Coded by @EXCELV1 on session 05a5c62989edb4dadf7cb1274e35e37d498b5af459b04e08fe08ab037a206ec841"
+        f"\U0001F539 Support account is available 24/7 {config.SUPPORT_HANDLE}\n"
+        "\U0001F539\n"
+        "\U0001F539 <b>BY PURCHASING YOU AGREE TO THESE RULES. "
+        "FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. "
+        "WE SHALL GIVE NO WARNINGS</b>\n\n"
+        "Welcome to the Store \U0001F44B\n"
+        "Use the menu below to interact with the bot \U0001F916"
     )
 
 
-
 def _tg_url(https_url: str) -> str:
-    """
-    Convert https://t.me/username  →  tg://resolve?domain=username
-    This opens the profile directly with one tap, no preview dialog.
-    Falls back to the original URL if it doesn't match the expected format.
-    """
+    """Convert https://t.me/username → tg://resolve?domain=username (one-tap open)."""
     import re
-    match = re.match(r"https?://t\.me/([A-Za-z0-9_]+)", https_url.strip())
+    url = (https_url or "").strip()
+    if not url:
+        return ""
+    match = re.match(r"https?://t\.me/([A-Za-z0-9_]+)", url)
     if match:
         return f"tg://resolve?domain={match.group(1)}"
-    return https_url
+    if url.startswith("@"):
+        return f"tg://resolve?domain={url.lstrip('@')}"
+    return url
 
 
 def main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+    rows = [
         [
-            InlineKeyboardButton(db.get_label("menu:store",   "\U0001F6D2 Store"),
-                                 callback_data="store"),
-            InlineKeyboardButton(db.get_label("menu:wallet",  "\U0001F4B5 Wallet"),
-                                 callback_data="wallet"),
+            InlineKeyboardButton(db.get_label("menu:store",  "🛒 Store"),  callback_data="store"),
+            InlineKeyboardButton(db.get_label("menu:wallet", "💵 Wallet"), callback_data="wallet"),
         ],
-        [InlineKeyboardButton(db.get_label("menu:rules",   "\U0001F6E1\uFE0F Rules"),
-                              callback_data="rules")],
-        [
-            InlineKeyboardButton(db.get_label("menu:support", "\u260E\uFE0F Support \u2197"),
-                                 url=_tg_url(config.SUPPORT_URL)),
-            InlineKeyboardButton(db.get_label("menu:channel", "\U0001F4C4 Channel \u2197"),
-                                 url=_tg_url(config.CHANNEL_URL)),
-        ],
-    ])
+        [InlineKeyboardButton(db.get_label("menu:rules", "🛡️ Rules"), callback_data="rules")],
+    ]
+    # Only add URL buttons if the URLs are actually configured
+    url_row = []
+    support_url = _tg_url(config.SUPPORT_URL)
+    channel_url = _tg_url(config.CHANNEL_URL)
+    if support_url:
+        url_row.append(InlineKeyboardButton(
+            db.get_label("menu:support", "☎️ Support ↗"), url=support_url))
+    if channel_url:
+        url_row.append(InlineKeyboardButton(
+            db.get_label("menu:channel", "📄 Channel ↗"), url=channel_url))
+    if url_row:
+        rows.append(url_row)
+    return InlineKeyboardMarkup(rows)
 
 
 def back_menu() -> InlineKeyboardMarkup:
@@ -332,7 +338,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(welcome_text(), parse_mode="HTML")
     except Exception as e:
         logger.error("start: welcome text error: %s", e)
-        await message.reply(Welcome_text(), reply_markup=main_menu())
+        await update.message.reply_text("Welcome to the Store 👋")
 
     # 3 — Menu buttons (this must always succeed)
     await update.message.reply_text("Use the buttons below 👇", reply_markup=main_menu())
@@ -607,7 +613,15 @@ async def _route_button(query, data: str, uid: int,
 
     if data == "menu":
         await channel_log.nav_event(uid, "Main Menu")
-        await safe_edit(query, welcome_text(), main_menu())
+        try:
+            await query.edit_message_text(
+                welcome_text(), reply_markup=main_menu(), parse_mode="HTML"
+            )
+        except Exception:
+            # Edit failed (e.g. message too old or invalid keyboard) — send fresh
+            await query.message.reply_text(
+                welcome_text(), reply_markup=main_menu(), parse_mode="HTML"
+            )
 
     elif data == "rules":
         await channel_log.nav_event(uid, "Rules")
