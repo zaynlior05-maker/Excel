@@ -332,7 +332,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(welcome_text(), parse_mode="HTML")
     except Exception as e:
         logger.error("start: welcome text error: %s", e)
-        await update.message.reply_text("Welcome to the Store 👋")
+        await message.reply(Welcome_text(), reply_markup=main_menu())
 
     # 3 — Menu buttons (this must always succeed)
     await update.message.reply_text("Use the buttons below 👇", reply_markup=main_menu())
