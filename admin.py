@@ -378,12 +378,13 @@ def labels_kb(overrides: dict) -> InlineKeyboardMarkup:
     # ── Editable bot texts ──
     rows.append([InlineKeyboardButton("── Bot Texts ──", callback_data="noop")])
     for key, display in [
-        ("welcome_text",     "✏️ Welcome Message"),
-        ("refund_text",      "✏️ Refund Policy (shown on /start)"),
-        ("rules_text",       "✏️ Rules Text (shown on Rules button)"),
-        ("store_cat_text",   "✏️ Store: 'Choose a category'"),
-        ("store_subl_text",  "✏️ Store: 'Select a list'"),
-        ("store_items_text", "✏️ Store: 'Tap items to add to cart'"),
+        ("welcome_text",       "✏️ Welcome Message"),
+        ("refund_text",        "✏️ Refund Policy (shown on /start)"),
+        ("rules_text",         "✏️ Rules Text (shown on Rules button)"),
+        ("payment_reject_msg", "✏️ Payment Rejection Message"),
+        ("store_cat_text",     "✏️ Store: 'Choose a category'"),
+        ("store_subl_text",    "✏️ Store: 'Select a list'"),
+        ("store_items_text",   "✏️ Store: 'Tap items to add to cart'"),
     ]:
         label = f"🔄 {display}" if key in overrides else display
         rows.append([InlineKeyboardButton(label, callback_data=f"adm_label_edit:{key}")])
@@ -1190,14 +1191,16 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         uid = result["user_id"]
         await channel_log.payment_rejected(uid, float(result["amount"]), query.from_user.id)
         await query.answer("❌ Rejected.", show_alert=True)
+        # Use admin-configurable rejection message
+        default_reject_msg = (
+            "❌ <b>Payment Rejected</b>\n\n"
+            "Your top-up could not be verified. This may be due to an incomplete payment "
+            "or missing transaction fees.\n\n"
+            f"Please contact {config.SUPPORT_HANDLE} for assistance."
+        )
+        reject_msg = db.get_label("payment_reject_msg", default_reject_msg)
         try:
-            await context.bot.send_message(
-                uid,
-                f"❌ <b>Top-up Rejected</b>\n\n"
-                "Your payment could not be verified.\n"
-                f"Please contact {config.SUPPORT_HANDLE} if you believe this is an error.",
-                parse_mode="HTML",
-            )
+            await context.bot.send_message(uid, reject_msg, parse_mode="HTML")
         except Exception:
             pass
         pending = await db.get_pending_payments()
