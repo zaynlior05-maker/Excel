@@ -1220,16 +1220,24 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         current = db.get_label(key, default)
         context.user_data["adm_awaiting"]   = "label_edit"
         context.user_data["adm_label_key"]  = key
-        long_text_keys = {"welcome_text", "refund_text", "rules_text", "store_cat_text", "store_subl_text", "store_items_text", "store_select_text"}
+        long_text_keys = {"welcome_text", "refund_text", "rules_text", "store_cat_text",
+                          "store_subl_text", "store_items_text", "store_select_text"}
         if key in long_text_keys:
             hint = (
-                f"🏷️ <b>Edit: {key}</b>\n\n"
+                f"📝 <b>Edit Content: {key}</b>\n\n"
                 "Send your new text now.\n"
-                "✅ Multi-line supported\n"
-                "✅ Emojis supported\n"
-                "✅ HTML bold: <code>&lt;b&gt;text&lt;/b&gt;</code>\n"
-                "✅ HTML italic: <code>&lt;i&gt;text&lt;/i&gt;</code>\n\n"
-                f"Current:\n<i>{current[:200]}{'...' if len(current) > 200 else ''}</i>"
+                "✅ Multi-line, emojis, any length\n"
+                "✅ HTML bold: <code>&lt;b&gt;text&lt;/b&gt;</code>\n\n"
+                f"Current preview:\n<i>{current[:200]}{'...' if len(current) > 200 else ''}</i>"
+            )
+        elif key.startswith("menu:"):
+            hint = (
+                f"🏷️ <b>Rename Button: {key}</b>\n\n"
+                f"Current name: <b>{current}</b>\n\n"
+                "⚠️ <b>This is the BUTTON NAME only</b> — keep it short!\n\n"
+                "💡 To change the <b>text shown when users tap this button</b>:\n"
+                "Go back → Labels → <b>── Bot Texts ──</b> section at the top\n\n"
+                "Send the new button name (max 64 chars):"
             )
         else:
             hint = (
@@ -1280,8 +1288,8 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if not msg:
             await query.answer("Message expired. Please start over.", show_alert=True)
             return
-        await _safe_edit(query, "📢 Sending broadcast…", back_to_admin())
-        await _do_broadcast(query.message.reply_text, context.bot, msg)
+        await _safe_edit(query, "📢 <b>Sending…</b> Please wait.", back_to_admin())
+        await _do_broadcast(query.message.reply_text, context.bot, msg, query.from_user.id)
 
     elif data.startswith("adm_bc_cancel:"):
         msg_key = data.split(":", 1)[1]
@@ -2316,21 +2324,54 @@ async def adm_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-async def _do_broadcast(reply_fn, bot, msg: str) -> None:
+async def _handle_broadcast_compose(update, context) -> None:
+    """Admin typed the broadcast message — show preview with Confirm/Cancel."""
+    context.user_data["adm_awaiting"] = None
+    msg = update.message.text.strip()
+    if not msg:
+        await update.message.reply_text("Message cannot be empty.")
+        return
+
+    # Store message in bot_data with a unique key (avoids callback_data length limit)
+    import uuid as _uuid
+    msg_key = _uuid.uuid4().hex[:12]
+    context.bot_data[msg_key] = msg
+
+    user_ids = await db.get_all_user_ids()
+    count    = len(user_ids)
+
+    await update.message.reply_text(
+        f"📢 <b>Broadcast Preview</b>\n"
+        f"<code>──────────────────────</code>\n"
+        f"{msg}\n"
+        f"<code>──────────────────────</code>\n"
+        f"Recipients: <b>{count}</b> users\n\n"
+        "Confirm to send to all users?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Send to All",  callback_data=f"adm_bc_confirm:{msg_key}")],
+            [InlineKeyboardButton("❌ Cancel",        callback_data=f"adm_bc_cancel:{msg_key}")],
+        ]),
+        parse_mode="HTML",
+    )
+
+
+async def _do_broadcast(reply_fn, bot, msg: str, admin_id: int = 0) -> None:
     user_ids = await db.get_all_user_ids()
     ok, fail = 0, 0
     for uid in user_ids:
         try:
             await bot.send_message(uid, msg, parse_mode="HTML")
             ok += 1
-        except (Forbidden, BadRequest):
-            fail += 1
         except Exception:
             fail += 1
     await reply_fn(
-        f"📢 Broadcast complete.\n✅ Sent: {ok}   ❌ Failed: {fail}",
+        f"📢 <b>Broadcast Complete</b>\n\n"
+        f"✅ Sent:   <b>{ok}</b>\n"
+        f"❌ Failed: <b>{fail}</b>\n"
+        f"Total:    {len(user_ids)} users",
+        parse_mode="HTML",
     )
-    await channel_log.broadcast_sent(0, ok, fail)  # admin_id not available here
+    await channel_log.broadcast_sent(admin_id, ok, fail)
 
 
 # ============================================================
