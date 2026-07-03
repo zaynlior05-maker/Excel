@@ -801,14 +801,18 @@ async def _route_button(query, data: str, uid: int,
         # ── Minimum balance check ──
         min_bal = config.MIN_PURCHASE_BALANCE
         if bal < min_bal:
+            shortfall = min_bal - bal
             await safe_edit(query,
-                f"⚠️ First time users are required to have a balance of minimum "
-                f"<b>{config.CURRENCY_SYMBOL}{min_bal:g}</b> in their balance to make a purchase, "
-                f"you currently have <b>{config.CURRENCY_SYMBOL}{bal:.2f}</b>",
+                f"<b>Account Notice</b>\n\n"
+                f"New accounts are required to load a minimum of "
+                f"<b>{config.CURRENCY_SYMBOL}{min_bal:g}</b> before placing their first order.\n\n"
+                f"Current balance: <b>{config.CURRENCY_SYMBOL}{bal:.2f}</b>\n"
+                f"Minimum required: <b>{config.CURRENCY_SYMBOL}{min_bal:g}</b>\n\n"
+                f"Please add funds to your account to proceed.",
                 InlineKeyboardMarkup([
-                    [InlineKeyboardButton("➕ Top Up Now", callback_data="topup")],
-                    [InlineKeyboardButton("⬅️ Back",       callback_data=f"subl:{cat_id}:{subl_id}")],
-                    [InlineKeyboardButton("🌏 Main Menu",   callback_data="menu")],
+                    [InlineKeyboardButton("➕ Top Up", callback_data="topup")],
+                    [InlineKeyboardButton("⬅️ Back",   callback_data=f"subl:{cat_id}:{subl_id}")],
+                    [InlineKeyboardButton("🌏 Menu",    callback_data="menu")],
                 ]),
             )
             return
