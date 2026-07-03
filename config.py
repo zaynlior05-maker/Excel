@@ -41,6 +41,11 @@ TOPUP_PRESETS = [50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 750, 1000]
 # Minimum top-up amount
 TOPUP_MIN = 50
 
+# Minimum balance a user must have before they can purchase anything.
+# Change via Railway Variable: MIN_PURCHASE_BALANCE=150
+from decimal import Decimal as _D
+MIN_PURCHASE_BALANCE: _D = _D(os.environ.get("MIN_PURCHASE_BALANCE", "150"))
+
 # ---- Items per page in store lists ----
 ITEMS_PER_PAGE = 8
 
@@ -78,7 +83,7 @@ CATEGORIES = [
             {"id": "dd-4th",   "label": "🔸 DD-4th"},
             {"id": "dd-7th",   "label": "🔸 DD-7th"},
             {"id": "5-base",   "label": "🔸 5-base"},
-
+            {"id": "10-pound", "label": "🔸 10-pound"},
         ],
     },
 ]
@@ -101,25 +106,13 @@ ITEMS = {
 
 # ---- Rules ----
 RULES_TEXT = (
-    "🛡️ <b>STORE RULES & REFUND POLICY</b>\n\n"
-    "⚠️ <b>IF YOU FAIL TO FOLLOW OUR CLEAR INSTRUCTED RULES YOU WILL NOT BE REFUNDED.</b>\n\n"
-    "ℹ️ <b>How to Apply for a Refund:</b>\n"
-    "1. Check card on pay.google.com\n"
-    "2. If the card is dead, click refund at the bottom of purchased card.\n"
-    "3. Send the bot a Screenshot/Photo that proves the card is dead.\n"
-    "4. When checking card on pay.google.com, you have an automatic 3 minute timer.\n"
-    "5. Failing to check card / provide proof of card being dead past the 3 minute timer can result in no refund.\n"
-    "6. When providing a photo or a screenshot, please make sure: Card Number, Expiry Date and CVV are fully visible.\n"
-    "7. If number doesn't call or is invalid this doesn't qualify for refund unless all info is missing or fake.\n"
-    "8. If all the details are valid and the card is dead your account will be credited again with a refund within 5 minutes.\n\n"
-    "💡 <b>Keep in Mind:</b>\n"
-    "• <b>£10 & £5 BASES ARE NOT REFUNDABLE</b>\n"
-    "• <b>HSBC CARDS ARE NOT REFUNDABLE</b> (Or ANY company under them such as John Lewis, M&S, First Direct, etc.)\n\n"
-    "⛔️ <b>NOTE</b> ⛔️\n"
-    "🔹 Support account is available 24/7 @EXCELV1.\n"
-    "🔹 1 Transaction per wallet unless payment is underpaid. Our wallet always changes after each completed deposit.\n"
-    "🔹 Payment: <b>CRYPTO ONLY</b>\n\n"
-    "<b>BY PURCHASING YOU AGREE TO THESE RULES. FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. WE SHALL GIVE NO WARNINGS.</b>"
+    "🛡️ <b>STORE RULES</b>\n\n"
+    "1. All sales are final unless a replacement is agreed in advance.\n"
+    "2. Refunds / replacements are only valid if you followed these rules.\n"
+    "3. Do not share, resell, or redistribute purchased items.\n"
+    "4. Be respectful to support staff.\n"
+    "5. By purchasing you confirm you have read and accepted these rules.\n\n"
+    "<i>Edit this text in config.py (RULES_TEXT).</i>"
 )
 
 # ---- Refund Policy shown on every /start ----
@@ -127,25 +120,16 @@ RULES_TEXT = (
 # Edit the text between the quotes. Keep \n for line breaks, \n\n for blank lines.
 # <b>text</b> = bold   <i>text</i> = italic
 REFUND_RULES_TEXT = (
-    "🛡️ <b>STORE RULES & REFUND POLICY</b>\n\n"
-    "⚠️ <b>IF YOU FAIL TO FOLLOW OUR CLEAR INSTRUCTED RULES YOU WILL NOT BE REFUNDED.</b>\n\n"
-    "ℹ️ <b>How to Apply for a Refund:</b>\n"
-    "1. Check card on pay.google.com\n"
-    "2. If the card is dead, click refund at the bottom of purchased card.\n"
-    "3. Send the bot a Screenshot/Photo that proves the card is dead.\n"
-    "4. When checking card on pay.google.com, you have an automatic 3 minute timer.\n"
-    "5. Failing to check card / provide proof of card being dead past the 3 minute timer can result in no refund.\n"
-    "6. When providing a photo or a screenshot, please make sure: Card Number, Expiry Date and CVV are fully visible.\n"
-    "7. If number doesn't call or is invalid this doesn't qualify for refund unless all info is missing or fake.\n"
-    "8. If all the details are valid and the card is dead your account will be credited again with a refund within 5 minutes.\n\n"
-    "💡 <b>Keep in Mind:</b>\n"
-    "• <b>£10 & £5 BASES ARE NOT REFUNDABLE</b>\n"
-    "• <b>HSBC CARDS ARE NOT REFUNDABLE</b> (Or ANY company under them such as John Lewis, M&S, First Direct, etc.)\n\n"
-    "⛔️ <b>NOTE</b> ⛔️\n"
-    "🔹 Support account is available 24/7 @EXCELV1.\n"
-    "🔹 1 Transaction per wallet unless payment is underpaid. Our wallet always changes after each completed deposit.\n"
-    "🔹 Payment: <b>CRYPTO ONLY</b>\n\n"
-    "<b>BY PURCHASING YOU AGREE TO THESE RULES. FAILURE TO READ THEM WILL FORFEIT YOUR REFUND / REPLACEMENT. WE SHALL GIVE NO WARNINGS.</b>"
+    "📋 <b>Refund Policy</b>\n\n"
+    "<b>IF YOU FAIL TO FOLLOW OUR CLEAR INSTRUCTED RULES "
+    "YOU WILL NOT BE REFUNDED.</b>\n\n"
+    "How to Apply for a Refund:\n"
+    "1. Contact support within 24 hours of purchase.\n"
+    "2. Provide your Transaction ID and a screenshot of the issue.\n"
+    "3. Refunds are reviewed case by case — no guarantees.\n\n"
+    "If the product was delivered and works as described, "
+    "no refund will be issued.\n\n"
+    f"<i>Edit this text in config.py (REFUND_RULES_TEXT).</i>"
 )
 
 # ---- Renameable labels (auto-built — do not edit) ----
