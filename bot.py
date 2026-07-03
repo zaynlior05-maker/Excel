@@ -797,6 +797,25 @@ async def _route_button(query, data: str, uid: int,
             return
         total = sum(Decimal(str(it["price"])) for it in selected)
         bal   = await db.get_balance(uid)
+
+        # ── Minimum balance check ──
+        min_bal = config.MIN_PURCHASE_BALANCE
+        if bal < min_bal:
+            shortfall = min_bal - bal
+            await safe_edit(query,
+                f"🔒 <b>Minimum Balance Required</b>\n\n"
+                f"You need at least <b>{config.CURRENCY_SYMBOL}{min_bal:g}</b> "
+                f"in your balance to make purchases on this store.\n\n"
+                f"Your balance:  <b>{config.CURRENCY_SYMBOL}{bal:.2f}</b>\n"
+                f"You need:      <b>{config.CURRENCY_SYMBOL}{float(shortfall):.2f}</b> more\n\n"
+                f"Top up your wallet to continue.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("➕ Top Up Now", callback_data="topup")],
+                    [InlineKeyboardButton("⬅️ Back",       callback_data=f"subl:{cat_id}:{subl_id}")],
+                    [InlineKeyboardButton("🌏 Main Menu",   callback_data="menu")],
+                ]),
+            )
+            return
         summary = (
             "🛒 <b>Order Summary</b>\n"
             "<code>──────────────────────</code>\n"
