@@ -579,13 +579,18 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 @admin_only
+@admin_only
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Usage: /broadcast YOUR MESSAGE HERE"""
     if not context.args:
         await update.message.reply_text("Usage: /broadcast YOUR MESSAGE")
         return
-    msg = " ".join(context.args)
-    await _do_broadcast(update.message.reply_text, context.bot, msg)
+    msg      = " ".join(context.args)
+    admin_id = update.effective_user.id
+    chat_id  = update.effective_chat.id
+    await update.message.reply_text("📢 Sending broadcast… Please wait.")
+    import asyncio as _asyncio
+    _asyncio.create_task(_do_broadcast(context.bot, msg, admin_id, chat_id))
 
 
 # ============================================================
@@ -1288,8 +1293,15 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if not msg:
             await query.answer("Message expired. Please start over.", show_alert=True)
             return
-        await _safe_edit(query, "📢 <b>Sending…</b> Please wait.", back_to_admin())
-        await _do_broadcast(query.message.reply_text, context.bot, msg, query.from_user.id)
+        context.bot_data.pop(msg_key, None)
+        admin_id = query.from_user.id
+        chat_id  = query.message.chat_id
+        await _safe_edit(query, "📢 <b>Sending to all users…</b>\n\nPlease wait.", back_to_admin())
+        # Run broadcast in background so it doesn't block or timeout
+        import asyncio as _asyncio
+        _asyncio.create_task(
+            _do_broadcast(context.bot, msg, admin_id, chat_id)
+        )
 
     elif data.startswith("adm_bc_cancel:"):
         msg_key = data.split(":", 1)[1]
@@ -2355,23 +2367,33 @@ async def _handle_broadcast_compose(update, context) -> None:
     )
 
 
-async def _do_broadcast(reply_fn, bot, msg: str, admin_id: int = 0) -> None:
-    user_ids = await db.get_all_user_ids()
-    ok, fail = 0, 0
-    for uid in user_ids:
+async def _do_broadcast(bot, msg: str, admin_id: int, chat_id: int) -> None:
+    """Send message to all users. Runs as background task. Reports result to admin."""
+    try:
+        user_ids = await db.get_all_user_ids()
+        ok, fail = 0, 0
+        for uid in user_ids:
+            try:
+                await bot.send_message(uid, msg, parse_mode="HTML")
+                ok += 1
+            except Exception:
+                fail += 1
+        # Send result to admin
+        await bot.send_message(
+            chat_id,
+            f"📢 <b>Broadcast Complete</b>\n\n"
+            f"✅ Sent:   <b>{ok}</b>\n"
+            f"❌ Failed: <b>{fail}</b>\n"
+            f"Total:    <b>{len(user_ids)}</b> users",
+            parse_mode="HTML",
+        )
+        await channel_log.broadcast_sent(admin_id, ok, fail)
+    except Exception as e:
+        logger.error("Broadcast error: %s", e)
         try:
-            await bot.send_message(uid, msg, parse_mode="HTML")
-            ok += 1
+            await bot.send_message(chat_id, f"⚠️ Broadcast error: {e}")
         except Exception:
-            fail += 1
-    await reply_fn(
-        f"📢 <b>Broadcast Complete</b>\n\n"
-        f"✅ Sent:   <b>{ok}</b>\n"
-        f"❌ Failed: <b>{fail}</b>\n"
-        f"Total:    {len(user_ids)} users",
-        parse_mode="HTML",
-    )
-    await channel_log.broadcast_sent(admin_id, ok, fail)
+            pass
 
 
 # ============================================================
