@@ -797,9 +797,24 @@ async def _route_button(query, data: str, uid: int,
             return
         total = sum(Decimal(str(it["price"])) for it in selected)
         bal   = await db.get_balance(uid)
-
-        # ── Minimum balance check ──
         min_bal = config.MIN_PURCHASE_BALANCE
+
+        # ── Validation order ──────────────────────────────────────
+        # 1. balance == 0            -> Insufficient Balance (no mention of minimum)
+        # 2. 0 < balance < min_bal   -> Minimum Deposit Required
+        # 3. balance >= min_bal      -> normal insufficient-balance check vs item price
+        if bal == 0:
+            await safe_edit(query,
+                f"❌ <b>Insufficient Balance!</b>\n\n"
+                f"This item costs <b>{config.CURRENCY_SYMBOL}{float(total):g}</b> "
+                f"but your wallet balance is <b>{config.CURRENCY_SYMBOL}0.00</b>.\n\n"
+                f"Please top up your wallet first.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Top Up Wallet", callback_data="topup")],
+                ]),
+            )
+            return
+
         if bal < min_bal:
             await safe_edit(query,
                 f"🛑 <b>Order Blocked</b>\n"
@@ -807,7 +822,7 @@ async def _route_button(query, data: str, uid: int,
                 f"Your account balance does not meet the minimum deposit required for new users.\n\n"
                 f"💰 <b>Current Balance:</b> {config.CURRENCY_SYMBOL}{bal:.2f}\n"
                 f"📋 <b>Required Minimum:</b> {config.CURRENCY_SYMBOL}{min_bal:g}\n\n"
-                f"💳 <b>Please fund your account to proceed.</b>",
+                f"Please fund your account to proceed.",
                 InlineKeyboardMarkup([
                     [InlineKeyboardButton("➕ Top Up", callback_data="topup")],
                     [InlineKeyboardButton("⬅️ Back",   callback_data=f"subl:{cat_id}:{subl_id}")],
@@ -815,6 +830,22 @@ async def _route_button(query, data: str, uid: int,
                 ]),
             )
             return
+
+        # balance >= min_bal — proceed to normal item-price check
+        if bal < total:
+            await safe_edit(query,
+                f"❌ <b>Insufficient Balance!</b>\n\n"
+                f"This item costs <b>{config.CURRENCY_SYMBOL}{float(total):g}</b> "
+                f"but your wallet balance is <b>{config.CURRENCY_SYMBOL}{bal:.2f}</b>.\n\n"
+                f"Please top up your wallet first.",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Top Up Wallet", callback_data="topup")],
+                    [InlineKeyboardButton("⬅️ Back",          callback_data=f"subl:{cat_id}:{subl_id}")],
+                    [InlineKeyboardButton("🌏 Main Menu",      callback_data="menu")],
+                ]),
+            )
+            return
+
         summary = (
             "🛒 <b>Order Summary</b>\n"
             "<code>──────────────────────</code>\n"
@@ -825,15 +856,6 @@ async def _route_button(query, data: str, uid: int,
             f"Balance:  {config.CURRENCY_SYMBOL}{bal:.2f}"
             + (f"\n⚠️ {gone} item(s) sold and removed." if gone else "")
         )
-        if bal < total:
-            shortfall = total - bal
-            await safe_edit(query, summary + f"\n\n❌ Need <b>{config.CURRENCY_SYMBOL}{float(shortfall):g}</b> more.",
-                InlineKeyboardMarkup([
-                    [InlineKeyboardButton("➕ Top Up Now", callback_data="topup")],
-                    [InlineKeyboardButton("⬅️ Back", callback_data=f"subl:{cat_id}:{subl_id}")],
-                    [InlineKeyboardButton("🌏 Main Menu", callback_data="menu")],
-                ]))
-            return
         await safe_edit(query, summary + "\n\n✅ Balance sufficient — confirm?",
             InlineKeyboardMarkup([
                 [InlineKeyboardButton(f"✅ Confirm — {config.CURRENCY_SYMBOL}{float(total):g}",
