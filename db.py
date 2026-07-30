@@ -68,6 +68,7 @@ async def init() -> None:
                 item_id          TEXT NOT NULL,
                 subl_id          TEXT NOT NULL,
                 amount           NUMERIC(10,2) NOT NULL,
+                cart_id          TEXT NOT NULL DEFAULT '',
                 status           TEXT NOT NULL DEFAULT 'pending_delivery',
                 delivery_file_id TEXT NOT NULL DEFAULT '',
                 created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -101,6 +102,9 @@ async def init() -> None:
         )
         await con.execute(
             "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_file_id TEXT NOT NULL DEFAULT ''"
+        )
+        await con.execute(
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS cart_id TEXT NOT NULL DEFAULT ''"
         )
     await _seed_sublists()
     await _refresh_sublist_cache()
@@ -589,13 +593,16 @@ async def get_stock_item(item_id: str) -> dict | None:
         return dict(row) if row else None
 
 
-async def purchase_item(user_id: int, item_id: str) -> dict:
+async def purchase_item(user_id: int, item_id: str, cart_id: str = "") -> dict:
     """
     Attempt to buy an item. Returns a result dict:
       {"status": "success", "order_id": ..., "content": ..., "price": ...,
-       "new_balance": ..., "bin": ..., "year": ..., "code": ..., "subl_id": ...}
+       "new_balance": ..., "bin": ..., "year": ..., "code": ..., "subl_id": ...,
+       "cart_id": ...}
       {"status": "not_available"}   item sold or missing
       {"status": "insufficient",  "balance": ..., "price": ..., "shortfall": ...}
+    cart_id groups multiple items from the same checkout so admin can
+    deliver all of them with one file upload.
     """
     async with _pool.acquire() as con:
         async with con.transaction():
@@ -633,9 +640,10 @@ async def purchase_item(user_id: int, item_id: str) -> dict:
             # Record order with pending_delivery status
             order_id = uuid.uuid4().hex[:12]
             await con.execute(
-                "INSERT INTO orders(id,user_id,item_id,subl_id,amount,status) "
-                "VALUES($1,$2,$3,$4,$5,$6)",
-                order_id, user_id, item_id, item["subl_id"], price, "pending_delivery",
+                "INSERT INTO orders(id,user_id,item_id,subl_id,amount,status,cart_id) "
+                "VALUES($1,$2,$3,$4,$5,$6,$7)",
+                order_id, user_id, item_id, item["subl_id"], price,
+                "pending_delivery", cart_id,
             )
 
             new_bal = await con.fetchval(
@@ -644,6 +652,7 @@ async def purchase_item(user_id: int, item_id: str) -> dict:
             return {
                 "status":      "success",
                 "order_id":    order_id,
+                "cart_id":     cart_id,
                 "content":     item["content"],
                 "price":       price,
                 "new_balance": new_bal,
@@ -690,10 +699,10 @@ async def set_order_status(order_id: str, status: str,
 
 
 async def get_pending_delivery_orders(limit: int = 50) -> list[dict]:
-    """All orders awaiting admin file delivery."""
+    """All individual orders awaiting file delivery (legacy / no cart_id)."""
     async with _pool.acquire() as con:
         rows = await con.fetch(
-            "SELECT o.id, o.user_id, o.subl_id, o.amount, o.created_at, "
+            "SELECT o.id, o.user_id, o.subl_id, o.amount, o.cart_id, o.created_at, "
             "s.bin, s.year, s.code "
             "FROM orders o LEFT JOIN stock s ON s.id = o.item_id "
             "WHERE o.status = 'pending_delivery' "
@@ -701,6 +710,58 @@ async def get_pending_delivery_orders(limit: int = 50) -> list[dict]:
             limit,
         )
         return [dict(r) for r in rows]
+
+
+async def get_pending_delivery_carts(limit: int = 50) -> list[dict]:
+    """
+    Pending deliveries grouped by cart.
+    Returns one row per cart_id with item_count and total_amount.
+    Single-item carts (or legacy orders with no cart_id) are shown individually.
+    """
+    async with _pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT cart_id, user_id, "
+            "COUNT(*) AS item_count, "
+            "SUM(amount) AS total_amount, "
+            "MIN(created_at) AS created_at "
+            "FROM orders "
+            "WHERE status = 'pending_delivery' AND cart_id != '' "
+            "GROUP BY cart_id, user_id "
+            "ORDER BY created_at ASC LIMIT $1",
+            limit,
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_cart_orders(cart_id: str) -> list[dict]:
+    """All orders belonging to a specific cart, with stock detail."""
+    async with _pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT o.id, o.user_id, o.item_id, o.subl_id, o.amount, "
+            "o.status, o.delivery_file_id, o.created_at, "
+            "s.bin, s.year, s.code, s.content "
+            "FROM orders o LEFT JOIN stock s ON s.id = o.item_id "
+            "WHERE o.cart_id = $1 ORDER BY o.created_at ASC",
+            cart_id,
+        )
+        return [dict(r) for r in rows]
+
+
+async def set_cart_status(cart_id: str, status: str,
+                          delivery_file_id: str = "") -> int:
+    """Mark every order in a cart with a new status. Returns count updated."""
+    async with _pool.acquire() as con:
+        if delivery_file_id:
+            result = await con.execute(
+                "UPDATE orders SET status=$2, delivery_file_id=$3 WHERE cart_id=$1",
+                cart_id, status, delivery_file_id,
+            )
+        else:
+            result = await con.execute(
+                "UPDATE orders SET status=$2 WHERE cart_id=$1",
+                cart_id, status,
+            )
+        return int(result.split()[-1])
 
 
 async def get_recent_orders(limit: int = 20) -> list[dict]:
@@ -718,7 +779,7 @@ async def get_recent_orders(limit: int = 20) -> list[dict]:
 async def get_user_orders(user_id: int, limit: int = 10) -> list[dict]:
     async with _pool.acquire() as con:
         rows = await con.fetch(
-            "SELECT o.id, o.subl_id, o.amount, o.status, o.created_at, "
+            "SELECT o.id, o.cart_id, o.subl_id, o.amount, o.status, o.created_at, "
             "s.bin, s.year, s.code "
             "FROM orders o LEFT JOIN stock s ON s.id=o.item_id "
             "WHERE o.user_id=$1 ORDER BY o.created_at DESC LIMIT $2",
