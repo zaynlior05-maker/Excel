@@ -7,6 +7,7 @@ Telegram Store Bot
 """
 
 import logging
+import re
 from decimal import Decimal
 
 from telegram import (
@@ -75,7 +76,6 @@ def _txt(key: str, default: str) -> str:
 
 def _tg_url(https_url: str) -> str:
     """Convert https://t.me/username → tg://resolve?domain=username (one-tap open)."""
-    import re
     url = (https_url or "").strip()
     if not url:
         return ""
@@ -226,20 +226,6 @@ def lines_menu(cat_id, subl_id, items, page=0, cart=None) -> InlineKeyboardMarku
         callback_data=f"cat:{cat_id}",
     )])
     rows.append([InlineKeyboardButton("🌏 Main Menu", callback_data="menu")])
-    return InlineKeyboardMarkup(rows)
-
-    subl_default = next(
-        (s["label"] for cat in config.CATEGORIES
-         for s in cat.get("sublists", []) if s["id"] == subl_id),
-        subl_id,
-    )
-    rows.append([InlineKeyboardButton(
-        f"\U0001F519 {db.get_label(f'subl:{subl_id}', subl_default)}",
-        callback_data=f"cat:{cat_id}",
-    )])
-    rows.append([InlineKeyboardButton(
-        "\U0001F30F Main Menu", callback_data="menu"
-    )])
     return InlineKeyboardMarkup(rows)
 
 
@@ -596,16 +582,6 @@ async def admin_relay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
     except Exception as e:
         logger.warning("Relay failed: %s", e)
-    """Log all unhandled exceptions so nothing fails silently."""
-    logger.error("Unhandled exception:", exc_info=context.error)
-    # Try to notify the user something went wrong
-    try:
-        if update and hasattr(update, "callback_query") and update.callback_query:
-            await update.callback_query.answer("⚠️ Something went wrong. Please try again.")
-        elif update and hasattr(update, "message") and update.message:
-            await update.message.reply_text("⚠️ Something went wrong. Please try again.")
-    except Exception:
-        pass
 
 
 # ============================================================
@@ -680,7 +656,6 @@ async def _route_button(query, data: str, uid: int,
             return
         # Locked base — show locked message to user
         if db.is_sublist_locked(subl_id):
-            subl_label = db.get_label(f"subl:{subl_id}", subl["label"])
             await safe_edit(
                 query,
                 f"Database Locked 🔒",
@@ -701,7 +676,7 @@ async def _route_button(query, data: str, uid: int,
                 sublist_back_menu(cat_id))
             return
         await safe_edit(query,
-            f"<code>──────────────────────</code>\n{_txt("store_items_text", "Tap items to add to cart:")}",
+            f"<code>──────────────────────</code>\n{_txt('store_items_text', 'Tap items to add to cart:')}",
             lines_menu(cat_id, subl_id, items, page=0, cart=cart))
 
     elif data.startswith("page:"):
@@ -712,12 +687,11 @@ async def _route_button(query, data: str, uid: int,
         if not subl:
             await safe_edit(query, "List not found.", store_menu())
             return
-        subl_label = db.get_label(f"subl:{subl_id}", subl["label"])
         items = await db.get_stock(subl_id)
         cart  = context.user_data.get("cart", {})
         context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": page}
         await safe_edit(query,
-            f"<code>──────────────────────</code>\n{_txt("store_items_text", "Tap items to add to cart:")}",
+            f"<code>──────────────────────</code>\n{_txt('store_items_text', 'Tap items to add to cart:')}",
             lines_menu(cat_id, subl_id, items, page=page, cart=cart))
 
     elif data.startswith("refresh:"):
@@ -737,7 +711,7 @@ async def _route_button(query, data: str, uid: int,
                 sublist_back_menu(cat_id))
             return
         await safe_edit(query,
-            f"{banner}<code>──────────────────────</code>\n{_txt("store_select_text", "Tap to select/deselect")}{note}:",
+            f"{banner}<code>──────────────────────</code>\n{_txt('store_select_text', 'Tap to select/deselect')}{note}:",
             lines_menu(cat_id, subl_id, items, page=0, cart=cart))
 
     elif data.startswith("sel:"):
@@ -757,20 +731,17 @@ async def _route_button(query, data: str, uid: int,
                 await query.answer("⚠️ This item is no longer available.", show_alert=True)
                 items = await db.get_stock(subl_id)
                 subl  = find_sublist(find_category(cat_id), subl_id)
-                subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
                 await safe_edit(query,
-                    f"<code>──────────────────────</code>\n{_txt("store_items_text", "Tap items to add to cart:")}",
+                    f"<code>──────────────────────</code>\n{_txt('store_items_text', 'Tap items to add to cart:')}",
                     lines_menu(cat_id, subl_id, items, page=page, cart=cart))
                 return
             cart[item_id] = subl_id
         context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": page}
         items = await db.get_stock(subl_id)
-        subl  = find_sublist(find_category(cat_id), subl_id)
-        subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
         count = len(cart)
         note  = f" · 🛒 <b>{count}</b> in cart" if count else ""
         await safe_edit(query,
-            f"<code>──────────────────────</code>\n{_txt("store_select_text", "Tap to select/deselect")}{note}:",
+            f"<code>──────────────────────</code>\n{_txt('store_select_text', 'Tap to select/deselect')}{note}:",
             lines_menu(cat_id, subl_id, items, page=page, cart=cart))
 
     elif data.startswith("cart_checkout:"):
@@ -789,8 +760,6 @@ async def _route_button(query, data: str, uid: int,
         if not selected:
             await query.answer("All selected items are now sold out!", show_alert=True)
             items = await db.get_stock(subl_id)
-            subl  = find_sublist(find_category(cat_id), subl_id)
-            subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
             await safe_edit(query,
                 f"❌ All items sold\n<code>──────────────────────</code>\n{_txt('store_items_text', 'Tap items to add to cart:')}",
                 lines_menu(cat_id, subl_id, items, page=int(page_s), cart={}))
@@ -800,9 +769,6 @@ async def _route_button(query, data: str, uid: int,
         min_bal = config.MIN_PURCHASE_BALANCE
 
         # ── Validation order ──────────────────────────────────────
-        # 1. balance == 0            -> Insufficient Balance (no mention of minimum)
-        # 2. 0 < balance < min_bal   -> Minimum Deposit Required
-        # 3. balance >= min_bal      -> normal insufficient-balance check vs item price
         if bal == 0:
             await safe_edit(query,
                 f"❌ <b>Insufficient Balance!</b>\n\n"
@@ -831,7 +797,6 @@ async def _route_button(query, data: str, uid: int,
             )
             return
 
-        # balance >= min_bal — proceed to normal item-price check
         if bal < total:
             await safe_edit(query,
                 f"❌ <b>Insufficient Balance!</b>\n\n"
@@ -878,6 +843,7 @@ async def _route_button(query, data: str, uid: int,
                 failed.append(result["status"])
         context.user_data["cart"] = {}
         new_bal = await db.get_balance(uid)
+
         if not purchased:
             await safe_edit(query,
                 "❌ <b>Purchase Failed</b>\n\nAll items became unavailable. Please try again.",
@@ -886,26 +852,37 @@ async def _route_button(query, data: str, uid: int,
                     [InlineKeyboardButton("🌏 Main Menu", callback_data="menu")],
                 ]))
             return
-        delivery = [
-            "✅ <b>Purchase Complete!</b>",
-            "<code>──────────────────────</code>",
-            f"Bought:      <b>{len(purchased)}</b> item(s)",
-            f"Spent:       <b>{config.CURRENCY_SYMBOL}{float(total_spent):g}</b>",
-            f"New balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}",
-        ]
+
+        # ── Step 1: Send "pending delivery" acknowledgment to buyer ──
+        item_lines = "\n".join(
+            f"• {r.get('bin','?')} - {r.get('year','?')} - {r.get('code','?')}  "
+            f"{config.CURRENCY_SYMBOL}{float(r['price']):g}"
+            for r in purchased
+        )
+        s = "s" if len(purchased) > 1 else ""
+        ack_msg = (
+            "✅ <b>Purchase Successful!</b>\n\n"
+            "<code>──────────────────────</code>\n"
+            f"{item_lines}\n"
+            "<code>──────────────────────</code>\n"
+            f"💷 Paid:      <b>{config.CURRENCY_SYMBOL}{float(total_spent):g}</b>\n"
+            f"💰 Remaining: <b>{config.CURRENCY_SYMBOL}{new_bal:.2f}</b>\n\n"
+            f"📦 Your file{s} will be delivered to you shortly."
+        )
         if failed:
-            delivery.append(f"⚠️ {len(failed)} item(s) unavailable (skipped).")
-        delivery += ["", "<b>📦 Your Items:</b>", "<code>──────────────────────</code>"]
-        for r in purchased:
-            delivery.append(f"<code>{r['content']}</code>")
-        delivery += ["<code>──────────────────────</code>", "<i>Screenshot or copy now.</i>"]
-        await safe_edit(query, "\n".join(delivery),
+            ack_msg += f"\n\n⚠️ {len(failed)} item(s) were unavailable and skipped."
+
+        await safe_edit(query, ack_msg,
             InlineKeyboardMarkup([
-                [InlineKeyboardButton("🛒 Buy More", callback_data=f"subl:{cat_id}:{subl_id}")],
-                [InlineKeyboardButton("🌏 Main Menu", callback_data="menu")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="menu")]
             ]))
+
+        # ── Step 2: Notify admins for each purchased item ──
+        for r in purchased:
+            await _notify_admins_pending_delivery(context.bot, uid, r, new_bal)
+
         await channel_log.log(
-            f"🛒 <b>Cart Purchase</b>\n"
+            f"🛒 <b>Cart Purchase (Pending Delivery)</b>\n"
             f"User: <code>{uid}</code>\n"
             f"Items: {len(purchased)}  ·  Total: {config.CURRENCY_SYMBOL}{float(total_spent):g}\n"
             f"Balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}"
@@ -1122,6 +1099,42 @@ async def _notify_admins_new_payment(bot, pay: dict) -> None:
                                      caption=f"Screenshot for payment {pay['payment_id']}")
         except Exception:
             logger.warning("Could not notify admin %s", admin_id)
+
+
+async def _notify_admins_pending_delivery(bot, buyer_id: int,
+                                          order_result: dict, new_bal) -> None:
+    """
+    Notify all admins that a purchase succeeded and file delivery is pending.
+    Sends an inline button to upload the file directly for that order.
+    """
+    order_id = order_result.get("order_id", "?")
+    bin_     = order_result.get("bin", "?")
+    year     = order_result.get("year", "?")
+    code     = order_result.get("code", "?")
+    price    = order_result.get("price", 0)
+    subl_id  = order_result.get("subl_id", "?")
+
+    text = (
+        f"📦 <b>Pending File Delivery</b>\n\n"
+        f"Order:   <code>{order_id}</code>\n"
+        f"User:    <code>{buyer_id}</code>\n"
+        f"Item:    {bin_} - {year} - {code}\n"
+        f"List:    <code>{subl_id}</code>\n"
+        f"Price:   <b>{config.CURRENCY_SYMBOL}{float(price):g}</b>\n\n"
+        "Tap the button below to upload the file for this order."
+    )
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            f"📤 Upload File for Order #{order_id}",
+            callback_data=f"adm_fulfill_order:{order_id}",
+        )
+    ]])
+
+    for admin_id in config.ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            logger.warning("Could not notify admin %s for pending delivery", admin_id)
 
 
 # ============================================================
