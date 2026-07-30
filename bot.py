@@ -431,6 +431,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if awaiting == "topup_amount":
         await handle_topup_amount(update, context)
         return
+    elif awaiting == "refund_screenshot":
+        # Text instead of photo — redirect back to photo prompt
+        await handle_refund_screenshot(update, context)
+        return
     elif awaiting == "proof":
         await handle_proof_text(update, context)
         return
@@ -471,8 +475,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Screenshot submitted as payment proof."""
-    if context.user_data.get("awaiting") == "proof":
+    """Route incoming photos: payment proof or refund screenshot."""
+    awaiting = context.user_data.get("awaiting")
+    if awaiting == "refund_screenshot":
+        await handle_refund_screenshot(update, context)
+    elif awaiting == "proof":
         await handle_proof_photo(update, context)
 
 
@@ -834,9 +841,12 @@ async def _route_button(query, data: str, uid: int,
         cart = context.user_data.get("cart", {})
         if not cart:
             await safe_edit(query, "Cart is empty.", main_menu()); return
+        # One cart_id groups all items from this checkout together
+        import uuid as _uuid
+        cart_id = _uuid.uuid4().hex[:12]
         purchased, failed, total_spent = [], [], Decimal("0")
         for iid in list(cart.keys()):
-            result = await db.purchase_item(uid, iid)
+            result = await db.purchase_item(uid, iid, cart_id=cart_id)
             if result["status"] == "success":
                 purchased.append(result); total_spent += result["price"]
             else:
@@ -877,13 +887,15 @@ async def _route_button(query, data: str, uid: int,
                 [InlineKeyboardButton("⬅️ Back", callback_data="menu")]
             ]))
 
-        # ── Step 2: Notify admins for each purchased item ──
-        for r in purchased:
-            await _notify_admins_pending_delivery(context.bot, uid, r, new_bal)
+        # ── Step 2: ONE admin notification for the whole cart ──
+        await _notify_admins_pending_delivery_cart(
+            context.bot, uid, cart_id, purchased, new_bal
+        )
 
         await channel_log.log(
             f"🛒 <b>Cart Purchase (Pending Delivery)</b>\n"
             f"User: <code>{uid}</code>\n"
+            f"Cart: <code>{cart_id}</code>\n"
             f"Items: {len(purchased)}  ·  Total: {config.CURRENCY_SYMBOL}{float(total_spent):g}\n"
             f"Balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}"
         )
@@ -1101,32 +1113,37 @@ async def _notify_admins_new_payment(bot, pay: dict) -> None:
             logger.warning("Could not notify admin %s", admin_id)
 
 
-async def _notify_admins_pending_delivery(bot, buyer_id: int,
-                                          order_result: dict, new_bal) -> None:
+async def _notify_admins_pending_delivery_cart(bot, buyer_id: int, cart_id: str,
+                                               purchased: list, new_bal) -> None:
     """
-    Notify all admins that a purchase succeeded and file delivery is pending.
-    Sends an inline button to upload the file directly for that order.
+    ONE notification per cart — lets admin upload a single file for
+    all items bought together instead of one-by-one.
     """
-    order_id = order_result.get("order_id", "?")
-    bin_     = order_result.get("bin", "?")
-    year     = order_result.get("year", "?")
-    code     = order_result.get("code", "?")
-    price    = order_result.get("price", 0)
-    subl_id  = order_result.get("subl_id", "?")
+    count       = len(purchased)
+    total_price = sum(float(r["price"]) for r in purchased)
+    item_lines  = "\n".join(
+        f"  {i+1}. {r.get('bin','?')} - {r.get('year','?')} - {r.get('code','?')}  "
+        f"{config.CURRENCY_SYMBOL}{float(r['price']):g}"
+        for i, r in enumerate(purchased)
+    )
+    s = "s" if count > 1 else ""
 
     text = (
         f"📦 <b>Pending File Delivery</b>\n\n"
-        f"Order:   <code>{order_id}</code>\n"
+        f"Cart:    <code>{cart_id}</code>\n"
         f"User:    <code>{buyer_id}</code>\n"
-        f"Item:    {bin_} - {year} - {code}\n"
-        f"List:    <code>{subl_id}</code>\n"
-        f"Price:   <b>{config.CURRENCY_SYMBOL}{float(price):g}</b>\n\n"
-        "Tap the button below to upload the file for this order."
+        f"Item{s}:  <b>{count}</b>\n"
+        f"<code>──────────────────────</code>\n"
+        f"{item_lines}\n"
+        f"<code>──────────────────────</code>\n"
+        f"Total:   <b>{config.CURRENCY_SYMBOL}{total_price:g}</b>\n\n"
+        f"Upload <b>one file</b> and the bot will deliver it to the buyer "
+        f"with a receipt covering all {count} item{s}."
     )
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton(
-            f"📤 Upload File for Order #{order_id}",
-            callback_data=f"adm_fulfill_order:{order_id}",
+            f"📤 Upload File for Cart #{cart_id} ({count} item{s})",
+            callback_data=f"adm_fulfill_cart:{cart_id}",
         )
     ]])
 
@@ -1140,6 +1157,128 @@ async def _notify_admins_pending_delivery(bot, buyer_id: int,
 # ============================================================
 #  Startup + main
 # ============================================================
+async def cmd_refund(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /refund — eligibility based on most recent order status + timing.
+
+    • pending_delivery (file NOT yet sent) → show refund rules only.
+    • completed (file sent) AND within 3 minutes of purchase → ✅ eligible, ask screenshot.
+    • completed (file sent) AND older than 3 minutes → ❌ window expired.
+    • no orders → friendly message.
+    """
+    from datetime import datetime, timezone as _tz
+
+    uid    = update.effective_user.id
+    orders = await db.get_user_orders(uid, limit=1)
+
+    if not orders:
+        await update.message.reply_text(
+            "❌ <b>No Recent Orders Found</b>\n\n"
+            "You don't have any recent purchases.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu")
+            ]]),
+            parse_mode="HTML",
+        )
+        return
+
+    order = orders[0]
+
+    # ── File NOT yet delivered → show refund rules, no screenshot ──
+    if order["status"] == "pending_delivery":
+        rules = db.get_label("refund_text", config.REFUND_RULES_TEXT)
+        await update.message.reply_text(
+            rules,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu")
+            ]]),
+            parse_mode="HTML",
+        )
+        return
+
+    # ── File delivered (completed) — check 3-minute window ───────
+    order_time = order["created_at"]
+    if order_time.tzinfo is None:
+        order_time = order_time.replace(tzinfo=_tz.utc)
+    elapsed_mins = (datetime.now(_tz.utc) - order_time).total_seconds() / 60
+
+    if elapsed_mins > 3:
+        await update.message.reply_text(
+            "❌ <b>Refund Window Expired</b>\n\n"
+            "The 3-minute refund window has passed.\n\n"
+            f"If you believe this is an error, contact {config.SUPPORT_HANDLE}.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu")
+            ]]),
+            parse_mode="HTML",
+        )
+        return
+
+    # ── Completed + within 3 minutes → eligible ──────────────────
+    context.user_data["awaiting"]          = "refund_screenshot"
+    context.user_data["refund_order_id"]   = order["id"]
+    context.user_data["refund_cart_id"]    = order.get("cart_id", "")
+    mins_left = max(0, round(3 - elapsed_mins))
+    await update.message.reply_text(
+        "✅ <b>You're Eligible for a Refund</b>\n\n"
+        f"⏱ Time remaining: approx. <b>{mins_left} minute{'s' if mins_left != 1 else ''}</b>\n\n"
+        "📸 Please send a <b>screenshot</b> of your issue below.\n"
+        "Our team will review and respond shortly.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="menu")
+        ]]),
+        parse_mode="HTML",
+    )
+
+
+async def handle_refund_screenshot(update, context) -> None:
+    """User sends a screenshot as part of a refund request."""
+    order_id = context.user_data.pop("refund_order_id", None)
+    cart_id  = context.user_data.pop("refund_cart_id", "")
+    context.user_data["awaiting"] = None
+
+    photo = update.message.photo
+    if not photo:
+        await update.message.reply_text(
+            "⚠️ Please send a <b>screenshot</b> (photo), not a text message.",
+            parse_mode="HTML",
+        )
+        # Restore state so next photo is caught
+        context.user_data["awaiting"]        = "refund_screenshot"
+        context.user_data["refund_order_id"] = order_id
+        context.user_data["refund_cart_id"]  = cart_id
+        return
+
+    uid      = update.effective_user.id
+    file_id  = photo[-1].file_id
+    ref_text = f"cart:{cart_id}" if cart_id else f"order:{order_id}"
+
+    await update.message.reply_text(
+        "✅ <b>Refund Request Received</b>\n\n"
+        "Your screenshot has been sent to our team for review.\n"
+        "You'll hear back shortly.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⬅️ Back to Menu", callback_data="menu")
+        ]]),
+        parse_mode="HTML",
+    )
+
+    # Forward screenshot + context to every admin
+    for admin_id in config.ADMIN_IDS:
+        try:
+            await context.bot.send_photo(
+                admin_id, file_id,
+                caption=(
+                    f"🔄 <b>Refund Request</b>\n\n"
+                    f"User:  <code>{uid}</code>\n"
+                    f"Ref:   <code>{ref_text}</code>"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.warning("Could not forward refund screenshot to admin %s", admin_id)
+
+
 async def on_startup(app: Application) -> None:
     await db.init()
     channel_log.init(app.bot)
@@ -1149,6 +1288,7 @@ async def on_startup(app: Application) -> None:
         BotCommand("wallet",  "💵 View wallet & top up"),
         BotCommand("rules",   "🛡️ Read the rules"),
         BotCommand("support", "☎️ Contact support"),
+        BotCommand("refund",  "🔄 Request a refund"),
     ])
     logger.info("Startup complete. Bot is running.")
 
@@ -1163,6 +1303,15 @@ def main() -> None:
         Application.builder()
         .token(config.BOT_TOKEN)
         .post_init(on_startup)
+        # Tune timeouts so one slow Telegram call never blocks everything else.
+        # connect_timeout  — how long to wait for the TCP handshake
+        # read_timeout     — how long to wait for Telegram to respond
+        # write_timeout    — how long to wait when uploading/sending
+        # pool_timeout     — how long to wait for a free HTTP connection slot
+        .connect_timeout(10.0)
+        .read_timeout(20.0)
+        .write_timeout(20.0)
+        .pool_timeout(10.0)
         .build()
     )
 
@@ -1175,6 +1324,7 @@ def main() -> None:
     app.add_handler(CommandHandler("wallet",  cmd_wallet))
     app.add_handler(CommandHandler("rules",   cmd_rules))
     app.add_handler(CommandHandler("support", cmd_support))
+    app.add_handler(CommandHandler("refund",  cmd_refund))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.PHOTO & filters.UpdateType.MESSAGE, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
