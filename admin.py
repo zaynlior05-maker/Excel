@@ -584,47 +584,85 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 @admin_only
 async def cmd_fulfill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Usage: /fulfill ORDER_ID
-    Puts admin into file-delivery mode for that order.
-    Admin then sends any file and the bot delivers it to the buyer.
+    Usage: /fulfill CART_ID  — deliver one file for all items in a cart.
+    Also accepts a single ORDER_ID for legacy/individual orders.
+    Tip: use /admin → 📦 Deliveries to see pending carts.
     """
     parts = context.args or []
     if not parts:
         await update.message.reply_text(
-            "Usage: /fulfill <b>ORDER_ID</b>\n\n"
-            "Then send the file to deliver to the buyer.\n\n"
-            "Tip: use /admin → 📦 Deliveries to see all pending orders.",
+            "Usage: /fulfill <b>CART_ID</b>\n\n"
+            "Then send the file to deliver to the buyer.\n"
+            "One file covers all items bought together in that cart.\n\n"
+            "Tip: use /admin → 📦 Deliveries to see pending carts.",
             parse_mode="HTML",
         )
         return
-    order_id = parts[0].strip()
-    order = await db.get_order(order_id)
+
+    ref_id = parts[0].strip()
+
+    # Try as cart_id first
+    orders = await db.get_cart_orders(ref_id)
+    if orders:
+        pending = [o for o in orders if o["status"] != "completed"]
+        if not pending:
+            await update.message.reply_text(
+                f"✅ All items in cart <code>{ref_id}</code> have already been fulfilled.",
+                parse_mode="HTML",
+            )
+            return
+        context.user_data["adm_awaiting"]        = "fulfill_file"
+        context.user_data["adm_fulfill_cart_id"] = ref_id
+        buyer_id = pending[0]["user_id"]
+        n        = len(pending)
+        s        = "s" if n > 1 else ""
+        total    = sum(float(o["amount"]) for o in pending)
+        item_lines = "\n".join(
+            f"  {i+1}. {o.get('bin','?')} - {o.get('year','?')} - {o.get('code','?')}  "
+            f"{config.CURRENCY_SYMBOL}{float(o['amount']):g}"
+            for i, o in enumerate(pending)
+        )
+        await update.message.reply_text(
+            f"📤 <b>Ready to Deliver — Cart <code>{ref_id}</code></b>\n\n"
+            f"Buyer:  <code>{buyer_id}</code>\n"
+            f"Items:  <b>{n}</b> pending\n"
+            f"<code>──────────────────────</code>\n"
+            f"{item_lines}\n"
+            f"<code>──────────────────────</code>\n"
+            f"Total:  <b>{config.CURRENCY_SYMBOL}{total:g}</b>\n\n"
+            f"Now send the file — bot will deliver it once with a receipt for all {n} item{s}.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="adm_menu")
+            ]]),
+            parse_mode="HTML",
+        )
+        return
+
+    # Fall back: try as single order_id
+    order = await db.get_order(ref_id)
     if not order:
         await update.message.reply_text(
-            f"❌ Order <code>{order_id}</code> not found.",
+            f"❌ No cart or order found with ID <code>{ref_id}</code>.",
             parse_mode="HTML",
         )
         return
     if order["status"] == "completed":
         await update.message.reply_text(
-            f"✅ Order <code>{order_id}</code> has already been fulfilled.",
+            f"✅ Order <code>{ref_id}</code> has already been fulfilled.",
             parse_mode="HTML",
         )
         return
 
-    context.user_data["adm_awaiting"]        = "fulfill_file"
-    context.user_data["adm_fulfill_order_id"] = order_id
-
-    bin_  = order.get("bin", "?")
-    year  = order.get("year", "?")
-    code  = order.get("code", "?")
+    context.user_data["adm_awaiting"]         = "fulfill_file"
+    context.user_data["adm_fulfill_cart_id"]  = order.get("cart_id", "")
+    context.user_data["adm_fulfill_order_id"] = ref_id
+    bin_ = order.get("bin", "?"); year = order.get("year", "?"); code = order.get("code", "?")
     await update.message.reply_text(
-        f"📤 <b>Ready to Deliver — Order <code>{order_id}</code></b>\n\n"
+        f"📤 <b>Ready to Deliver — Order <code>{ref_id}</code></b>\n\n"
         f"Buyer:  <code>{order['user_id']}</code>\n"
         f"Item:   {bin_} - {year} - {code}\n"
         f"Price:  {config.CURRENCY_SYMBOL}{float(order['amount']):g}\n\n"
-        "Now send the file (document, photo, etc.) to deliver to the buyer.\n"
-        "The bot will forward it with a full purchase receipt.",
+        "Now send the file (document, photo, etc.) to deliver to the buyer.",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="adm_menu")
         ]]),
@@ -668,60 +706,128 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # ---- Deliveries ----
     elif data == "adm_deliveries":
-        orders = await db.get_pending_delivery_orders(50)
-        if not orders:
+        carts = await db.get_pending_delivery_carts(50)
+        if not carts:
             await _safe_edit(query,
                 "📦 <b>Pending Deliveries</b>\n\n✅ No pending deliveries right now!",
                 back_to_admin())
             return
-        lines = [f"📦 <b>Pending Deliveries</b> ({len(orders)})\n"]
+        lines = [f"📦 <b>Pending Deliveries</b> ({len(carts)} cart{'s' if len(carts) != 1 else ''})\n"]
         rows  = []
-        for o in orders:
-            bin_  = o.get("bin") or "?"
-            year  = o.get("year") or "?"
-            code  = o.get("code") or "?"
-            ts    = o["created_at"].strftime("%d/%m %H:%M")
+        for c in carts:
+            cart_id   = c["cart_id"]
+            n         = c["item_count"]
+            total     = c["total_amount"]
+            ts        = c["created_at"].strftime("%d/%m %H:%M")
+            s         = "s" if n > 1 else ""
             lines.append(
-                f"• <code>{o['id']}</code>  User: <code>{o['user_id']}</code>\n"
-                f"  {bin_} - {year} - {code}  "
-                f"{config.CURRENCY_SYMBOL}{o['amount']:.2f}  <i>{ts}</i>"
+                f"• Cart <code>{cart_id}</code>  User: <code>{c['user_id']}</code>\n"
+                f"  {n} item{s}  {config.CURRENCY_SYMBOL}{total:.2f}  <i>{ts}</i>"
             )
             rows.append([InlineKeyboardButton(
-                f"📤 Deliver #{o['id']}  ({bin_} - {year})",
-                callback_data=f"adm_fulfill_order:{o['id']}",
+                f"📤 Deliver Cart #{cart_id}  ({n} item{s})",
+                callback_data=f"adm_fulfill_cart:{cart_id}",
             )])
         rows.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_menu")])
         await _safe_edit(query, "\n".join(lines), InlineKeyboardMarkup(rows))
 
-    # ---- Fulfill order (admin taps "Upload File for Order #ID") ----
+    # ---- Fulfill cart (admin taps "Upload File for Cart #ID") ----
+    elif data.startswith("adm_fulfill_cart:"):
+        cart_id = data.split(":", 1)[1]
+        orders  = await db.get_cart_orders(cart_id)
+        if not orders:
+            await query.answer("Cart not found.", show_alert=True)
+            return
+        pending = [o for o in orders if o["status"] != "completed"]
+        if not pending:
+            await query.answer("All items in this cart have already been fulfilled.", show_alert=True)
+            return
+
+        context.user_data["adm_awaiting"]        = "fulfill_file"
+        context.user_data["adm_fulfill_cart_id"] = cart_id
+
+        buyer_id = pending[0]["user_id"]
+        n        = len(pending)
+        s        = "s" if n > 1 else ""
+        total    = sum(float(o["amount"]) for o in pending)
+        item_lines = "\n".join(
+            f"  {i+1}. {o.get('bin','?')} - {o.get('year','?')} - {o.get('code','?')}  "
+            f"{config.CURRENCY_SYMBOL}{float(o['amount']):g}"
+            for i, o in enumerate(pending)
+        )
+        await _safe_edit(
+            query,
+            f"📤 <b>Ready to Deliver — Cart <code>{cart_id}</code></b>\n\n"
+            f"Buyer:   <code>{buyer_id}</code>\n"
+            f"Items:   <b>{n}</b>\n"
+            f"<code>──────────────────────</code>\n"
+            f"{item_lines}\n"
+            f"<code>──────────────────────</code>\n"
+            f"Total:   <b>{config.CURRENCY_SYMBOL}{total:g}</b>\n\n"
+            f"Send <b>one file</b> — it will be delivered to the buyer once with "
+            f"a receipt listing all {n} item{s}.",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="adm_menu")
+            ]]),
+        )
+
+    # ---- Legacy single-order fulfill (backward compat) ----
     elif data.startswith("adm_fulfill_order:"):
         order_id = data.split(":", 1)[1]
-        order = await db.get_order(order_id)
+        order    = await db.get_order(order_id)
         if not order:
             await query.answer("Order not found.", show_alert=True)
             return
         if order["status"] == "completed":
             await query.answer("This order has already been fulfilled.", show_alert=True)
             return
-
-        context.user_data["adm_awaiting"]         = "fulfill_file"
-        context.user_data["adm_fulfill_order_id"] = order_id
-
-        bin_  = order.get("bin", "?")
-        year  = order.get("year", "?")
-        code  = order.get("code", "?")
-        await _safe_edit(
-            query,
-            f"📤 <b>Ready to Deliver — Order <code>{order_id}</code></b>\n\n"
-            f"Buyer:  <code>{order['user_id']}</code>\n"
-            f"Item:   {bin_} - {year} - {code}\n"
-            f"Price:  {config.CURRENCY_SYMBOL}{float(order['amount']):g}\n\n"
-            "Now send the file (document, photo, etc.) to deliver to the buyer.\n"
-            "The bot will forward it with a full purchase receipt.",
-            InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancel", callback_data="adm_menu")
-            ]]),
-        )
+        # If it has a cart_id, redirect to cart flow
+        if order.get("cart_id"):
+            cart_id = order["cart_id"]
+            context.user_data["adm_awaiting"]        = "fulfill_file"
+            context.user_data["adm_fulfill_cart_id"] = cart_id
+            orders  = await db.get_cart_orders(cart_id)
+            pending = [o for o in orders if o["status"] != "completed"]
+            n       = len(pending)
+            s       = "s" if n > 1 else ""
+            total   = sum(float(o["amount"]) for o in pending)
+            item_lines = "\n".join(
+                f"  {i+1}. {o.get('bin','?')} - {o.get('year','?')} - {o.get('code','?')}"
+                for i, o in enumerate(pending)
+            )
+            await _safe_edit(
+                query,
+                f"📤 <b>Ready to Deliver — Cart <code>{cart_id}</code></b>\n\n"
+                f"Buyer:  <code>{order['user_id']}</code>\n"
+                f"Items:  <b>{n}</b> pending in this cart\n"
+                f"<code>──────────────────────</code>\n"
+                f"{item_lines}\n"
+                f"<code>──────────────────────</code>\n"
+                f"Total:  <b>{config.CURRENCY_SYMBOL}{total:g}</b>\n\n"
+                f"Send one file to deliver all {n} item{s} at once.",
+                InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancel", callback_data="adm_menu")
+                ]]),
+            )
+        else:
+            # Old single order with no cart_id
+            context.user_data["adm_awaiting"]        = "fulfill_file"
+            context.user_data["adm_fulfill_cart_id"] = ""
+            context.user_data["adm_fulfill_order_id"] = order_id
+            bin_  = order.get("bin", "?")
+            year  = order.get("year", "?")
+            code  = order.get("code", "?")
+            await _safe_edit(
+                query,
+                f"📤 <b>Ready to Deliver — Order <code>{order_id}</code></b>\n\n"
+                f"Buyer:  <code>{order['user_id']}</code>\n"
+                f"Item:   {bin_} - {year} - {code}\n"
+                f"Price:  {config.CURRENCY_SYMBOL}{float(order['amount']):g}\n\n"
+                "Send the file to deliver to the buyer.",
+                InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancel", callback_data="adm_menu")
+                ]]),
+            )
 
     # ---- Stock overview ----
     elif data == "adm_stock":
@@ -1861,85 +1967,116 @@ async def _handle_fulfill_file(update, context, file_id: str,
                                 file_type: str = "document") -> None:
     """
     Called when admin sends a file while adm_awaiting == 'fulfill_file'.
-    Delivers the file to the buyer with a full receipt caption.
+    Delivers ONE file to the buyer covering all items in the cart.
     """
-    order_id = context.user_data.pop("adm_fulfill_order_id", None)
+    cart_id  = context.user_data.pop("adm_fulfill_cart_id", None)
+    order_id = context.user_data.pop("adm_fulfill_order_id", None)   # legacy fallback
     context.user_data["adm_awaiting"] = None
 
-    if not order_id:
-        await update.message.reply_text("⚠️ No order selected. Use /fulfill ORDER_ID first.")
-        return
-
-    order = await db.get_order(order_id)
-    if not order:
-        await update.message.reply_text(f"❌ Order <code>{order_id}</code> not found.", parse_mode="HTML")
-        return
-    if order["status"] == "completed":
+    # ── Resolve to a list of pending orders ─────────────────────────
+    if cart_id:
+        all_orders = await db.get_cart_orders(cart_id)
+        pending    = [o for o in all_orders if o["status"] != "completed"]
+    elif order_id:
+        order = await db.get_order(order_id)
+        if not order:
+            await update.message.reply_text(
+                f"❌ Order <code>{order_id}</code> not found.", parse_mode="HTML"
+            )
+            return
+        pending = [] if order["status"] == "completed" else [order]
+    else:
         await update.message.reply_text(
-            f"⚠️ Order <code>{order_id}</code> has already been fulfilled.", parse_mode="HTML"
+            "⚠️ No cart or order selected. Use /fulfill CART_ID or /admin → 📦 Deliveries."
         )
         return
 
-    buyer_id = order["user_id"]
-    bin_     = order.get("bin", "?")
-    year     = order.get("year", "?")
-    code     = order.get("code", "?")
-    price    = order.get("amount", 0)
-    subl_id  = order.get("subl_id", "?")
+    if not pending:
+        await update.message.reply_text(
+            "⚠️ All items in this cart have already been fulfilled.", parse_mode="HTML"
+        )
+        return
 
-    # Get updated buyer balance after purchase
-    from decimal import Decimal as _D
-    import db as _db
-    new_bal = await _db.get_balance(buyer_id)
+    buyer_id = pending[0]["user_id"]
+    new_bal  = await db.get_balance(buyer_id)
+    total    = sum(float(o["amount"]) for o in pending)
+    n        = len(pending)
+    s        = "s" if n > 1 else ""
 
-    receipt_caption = (
-        "✅ <b>Purchase Successful!</b>\n\n"
-        f"💳 BIN:              <b>{bin_}</b>\n"
-        f"📦 Item:             {bin_} - {year} - {code}\n"
-        f"💷 Price:            <b>{config.CURRENCY_SYMBOL}{float(price):g}</b>\n"
-        f"💰 Remaining balance: <b>{config.CURRENCY_SYMBOL}{new_bal:.2f}</b>\n\n"
-        "If there are any issues, type /refund and follow the instructions"
-    )
+    # ── Build receipt caption (covers all items) ─────────────────────
+    if n == 1:
+        o   = pending[0]
+        bin_ = o.get("bin", "?"); year = o.get("year", "?"); code = o.get("code", "?")
+        receipt_caption = (
+            "✅ <b>Your Order Has Been Delivered!</b>\n\n"
+            f"💳 BIN:    <b>{bin_}</b>\n"
+            f"📦 Item:   {bin_} - {year} - {code}\n"
+            f"💷 Price:  <b>{config.CURRENCY_SYMBOL}{float(o['amount']):g}</b>\n"
+            f"💰 Balance: <b>{config.CURRENCY_SYMBOL}{new_bal:.2f}</b>\n\n"
+            "If there are any issues, type /refund within 3 minutes."
+        )
+    else:
+        item_lines = "\n".join(
+            f"  {i+1}. {o.get('bin','?')} - {o.get('year','?')} - {o.get('code','?')}  "
+            f"{config.CURRENCY_SYMBOL}{float(o['amount']):g}"
+            for i, o in enumerate(pending)
+        )
+        receipt_caption = (
+            f"✅ <b>Your {n} Items Have Been Delivered!</b>\n\n"
+            f"<code>──────────────────────</code>\n"
+            f"{item_lines}\n"
+            f"<code>──────────────────────</code>\n"
+            f"💷 Total:   <b>{config.CURRENCY_SYMBOL}{total:g}</b>\n"
+            f"💰 Balance: <b>{config.CURRENCY_SYMBOL}{new_bal:.2f}</b>\n\n"
+            "If there are any issues, type /refund within 3 minutes."
+        )
 
-    # Deliver file to buyer
-    delivered = False
+    # Telegram caption limit is 1024 chars
+    if len(receipt_caption) > 1024:
+        receipt_caption = receipt_caption[:1020] + "…"
+
+    # ── Send the file ONCE to the buyer ─────────────────────────────
     try:
         if file_type == "photo":
             await context.bot.send_photo(
-                chat_id=buyer_id,
-                photo=file_id,
-                caption=receipt_caption,
-                parse_mode="HTML",
+                chat_id=buyer_id, photo=file_id,
+                caption=receipt_caption, parse_mode="HTML",
             )
         else:
             await context.bot.send_document(
-                chat_id=buyer_id,
-                document=file_id,
-                caption=receipt_caption,
-                parse_mode="HTML",
+                chat_id=buyer_id, document=file_id,
+                caption=receipt_caption, parse_mode="HTML",
             )
-        delivered = True
     except Exception as e:
         logger.error("Could not deliver file to buyer %s: %s", buyer_id, e)
         await update.message.reply_text(
             f"❌ <b>Delivery failed</b>\n\n"
-            f"Could not send file to buyer <code>{buyer_id}</code>.\n"
+            f"Could not send to buyer <code>{buyer_id}</code>.\n"
             f"Error: <code>{e}</code>\n\n"
-            "The order status has NOT been updated. Please try again.",
+            "Order status has NOT changed. Please try again.",
             parse_mode="HTML",
         )
         return
 
-    # Mark order as completed
-    await db.set_order_status(order_id, "completed", delivery_file_id=file_id)
+    # ── Mark all pending orders as completed ────────────────────────
+    if cart_id:
+        await db.set_cart_status(cart_id, "completed", delivery_file_id=file_id)
+    else:
+        await db.set_order_status(order_id, "completed", delivery_file_id=file_id)
 
-    # Confirm to admin
+    # ── Confirm to admin ────────────────────────────────────────────
+    ref_label = f"Cart <code>{cart_id}</code>" if cart_id else f"Order <code>{order_id}</code>"
+    summary_lines = "\n".join(
+        f"  • {o.get('bin','?')} - {o.get('year','?')} - {o.get('code','?')}"
+        for o in pending
+    )
     await update.message.reply_text(
         f"✅ <b>File Delivered!</b>\n\n"
-        f"Order:  <code>{order_id}</code>\n"
+        f"{ref_label}\n"
         f"Buyer:  <code>{buyer_id}</code>\n"
-        f"Item:   {bin_} - {year} - {code}\n\n"
-        "The buyer has received the file and receipt. Order marked as completed.",
+        f"Items:  <b>{n}</b>\n"
+        f"{summary_lines}\n\n"
+        "Buyer received the file + receipt. All orders marked completed.",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("📦 View Deliveries", callback_data="adm_deliveries"),
             InlineKeyboardButton("⬅️ Admin Menu",      callback_data="adm_menu"),
@@ -1947,12 +2084,10 @@ async def _handle_fulfill_file(update, context, file_id: str,
         parse_mode="HTML",
     )
 
-    # Log the delivery
     await channel_log.log(
         f"📦 <b>File Delivered</b>\n"
-        f"Order: <code>{order_id}</code>\n"
-        f"Buyer: <code>{buyer_id}</code>\n"
-        f"Item: {bin_} - {year} - {code}  {config.CURRENCY_SYMBOL}{float(price):g}\n"
+        f"Cart: <code>{cart_id or 'n/a'}</code>  Orders: {n}\n"
+        f"Buyer: <code>{buyer_id}</code>  Total: {config.CURRENCY_SYMBOL}{total:g}\n"
         f"Admin: <code>{update.effective_user.id}</code>"
     )
 
