@@ -27,6 +27,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 import admin
 
@@ -1304,15 +1305,28 @@ def main() -> None:
         Application.builder()
         .token(config.BOT_TOKEN)
         .post_init(on_startup)
-        # Tune timeouts so one slow Telegram call never blocks everything else.
-        # connect_timeout  — how long to wait for the TCP handshake
-        # read_timeout     — how long to wait for Telegram to respond
-        # write_timeout    — how long to wait when uploading/sending
-        # pool_timeout     — how long to wait for a free HTTP connection slot
-        .connect_timeout(10.0)
-        .read_timeout(20.0)
-        .write_timeout(20.0)
-        .pool_timeout(10.0)
+        # ── Concurrency ──────────────────────────────────────────────
+        # Process updates from different users as independent asyncio tasks.
+        # Without this, every button tap from every user queues behind the
+        # previous one — User A blocks User B entirely.
+        .concurrent_updates(True)
+        # ── HTTP connection pools ─────────────────────────────────────
+        # request        — used for all send/edit/answer calls (needs many slots)
+        # get_updates_request — used only for the long-poll loop (1 connection is fine)
+        .request(HTTPXRequest(
+            connection_pool_size=16,   # up to 16 concurrent API calls
+            connect_timeout=10.0,
+            read_timeout=20.0,
+            write_timeout=20.0,
+            pool_timeout=10.0,
+        ))
+        .get_updates_request(HTTPXRequest(
+            connection_pool_size=2,
+            connect_timeout=5.0,
+            read_timeout=35.0,   # long-poll window; Telegram holds for ~30 s
+            write_timeout=5.0,
+            pool_timeout=5.0,
+        ))
         .build()
     )
 
