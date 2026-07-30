@@ -6,6 +6,7 @@ Telegram Store Bot
   Part 4: Full admin panel
 """
 
+import asyncio
 import logging
 import re
 from decimal import Decimal
@@ -294,7 +295,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         existing = await db.get_user_info(uid)
         is_new   = existing is None
         await db.ensure_user(uid, username)
-        await channel_log.user_start(uid, username, is_new)
+        asyncio.create_task(channel_log.user_start(uid, username, is_new))
         banned = await db.is_banned(uid)
     except Exception as e:
         logger.error("start: DB error: %s", e)
@@ -525,7 +526,7 @@ async def handle_bin_search(update, context) -> None:
             if it["bin"] == bin_digits:
                 matches.append((subl["id"], it))
 
-    await channel_log.bin_search(update.effective_user.id, bin_digits, len(matches))
+    asyncio.create_task(channel_log.bin_search(update.effective_user.id, bin_digits, len(matches)))
 
     if not matches:
         await update.message.reply_text(
@@ -614,7 +615,7 @@ async def _route_button(query, data: str, uid: int,
                         context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == "menu":
-        await channel_log.nav_event(uid, "Main Menu")
+        asyncio.create_task(channel_log.nav_event(uid, "Main Menu"))
         try:
             await query.edit_message_text(
                 welcome_text(), reply_markup=main_menu(), parse_mode="HTML"
@@ -629,7 +630,7 @@ async def _route_button(query, data: str, uid: int,
         await safe_edit(query, db.get_label("rules_text", config.RULES_TEXT), back_menu())
 
     elif data == "store":
-        await channel_log.nav_event(uid, "Store")
+        asyncio.create_task(channel_log.nav_event(uid, "Store"))
         await safe_edit(
             query,
             f"<code>──────────────────────</code>\n{_txt('store_cat_text', 'Choose a category:')}",
@@ -643,7 +644,7 @@ async def _route_button(query, data: str, uid: int,
             await safe_edit(query, "Category not found.", store_menu())
             return
         cat_label = db.get_label(f"cat:{cat_id}", cat["label"])
-        await channel_log.nav_event(uid, "Category", cat_label)
+        asyncio.create_task(channel_log.nav_event(uid, "Category", cat_label))
         if not cat.get("sublists"):
             await safe_edit(query, f"No lists yet.",
                             sublist_back_menu(cat_id))
@@ -673,7 +674,7 @@ async def _route_button(query, data: str, uid: int,
             )
             return
         subl_label = db.get_label(f"subl:{subl_id}", subl["label"])
-        await channel_log.nav_event(uid, "Sublist", subl_label)
+        asyncio.create_task(channel_log.nav_event(uid, "Sublist", subl_label))
         items = await db.get_stock(subl_id)
         cart  = context.user_data.get("cart", {})
         context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": 0}
@@ -892,19 +893,19 @@ async def _route_button(query, data: str, uid: int,
             context.bot, uid, cart_id, purchased, new_bal
         )
 
-        await channel_log.log(
+        asyncio.create_task(channel_log.log(
             f"🛒 <b>Cart Purchase (Pending Delivery)</b>\n"
             f"User: <code>{uid}</code>\n"
             f"Cart: <code>{cart_id}</code>\n"
             f"Items: {len(purchased)}  ·  Total: {config.CURRENCY_SYMBOL}{float(total_spent):g}\n"
             f"Balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}"
-        )
+        ))
 
     elif data.startswith("binsearch:"):
         cat_id = data.split(":", 1)[1]
         context.user_data["awaiting"] = "bin_search"
         context.user_data["bin_cat"]  = cat_id
-        await channel_log.nav_event(uid, "BIN Search Started")
+        asyncio.create_task(channel_log.nav_event(uid, "BIN Search Started"))
         await safe_edit(
             query,
             "\U0001F50D <b>Search for BIN</b>\n\n"
@@ -921,7 +922,7 @@ async def _route_button(query, data: str, uid: int,
 
     elif data == "topup":
         context.user_data["awaiting"] = None
-        await channel_log.nav_event(uid, "Top-Up Menu")
+        asyncio.create_task(channel_log.nav_event(uid, "Top-Up Menu"))
         if not payments.active_coins():
             await safe_edit(query,
                 "⚠️ No wallet addresses configured yet.\n"
@@ -931,7 +932,7 @@ async def _route_button(query, data: str, uid: int,
 
     elif data == "topup_custom":
         context.user_data["awaiting"] = "topup_amount"
-        await channel_log.nav_event(uid, "Custom Amount")
+        asyncio.create_task(channel_log.nav_event(uid, "Custom Amount"))
         await safe_edit(
             query,
             f"\U0001F4B0 <b>Custom Amount</b>\n\n"
@@ -945,7 +946,7 @@ async def _route_button(query, data: str, uid: int,
     elif data.startswith("topup_amt:"):
         amt_val = data.split(":", 1)[1]
         context.user_data["topup_amount"] = float(amt_val)
-        await channel_log.nav_event(uid, "Amount Selected", f"{config.CURRENCY_SYMBOL}{amt_val}")
+        asyncio.create_task(channel_log.nav_event(uid, "Amount Selected", f"{config.CURRENCY_SYMBOL}{amt_val}"))
         await safe_edit(query, "Choose which coin you will pay with:", coin_menu())
 
     elif data.startswith("topup_coin:"):
@@ -954,7 +955,7 @@ async def _route_button(query, data: str, uid: int,
         if not amount:
             await safe_edit(query, "Please pick an amount first.", amount_menu())
             return
-        await channel_log.nav_event(uid, "Coin Selected", f"{coin} for {config.CURRENCY_SYMBOL}{amount:g}")
+        asyncio.create_task(channel_log.nav_event(uid, "Coin Selected", f"{coin} for {config.CURRENCY_SYMBOL}{amount:g}"))
         await show_payment_address(query, context, uid, amount, coin)
 
     elif data.startswith("pay_sent:"):
@@ -994,7 +995,7 @@ async def show_payment_address(query, context, user_id, amount, coin) -> None:
     await db.ensure_user(user_id, getattr(getattr(query, 'from_user', None), 'username', '') or "")
     await db.record_payment(payment_id, user_id, Decimal(str(amount)), coin)
     context.user_data["topup_amount"] = None
-    await channel_log.topup_started(user_id, amount, coin)
+    asyncio.create_task(channel_log.topup_started(user_id, amount, coin))
 
     # Fetch live exchange rate
     rates    = await payments.get_rates_gbp()
@@ -1040,10 +1041,10 @@ async def handle_proof_text(update, context) -> None:
     )
     pay = await db.get_payment(payment_id)
     if pay:
-        await channel_log.proof_submitted(
+        asyncio.create_task(channel_log.proof_submitted(
             update.effective_user.id, float(pay["amount"]),
             pay["coin"], f"txid:{tx_ref}", payment_id,
-        )
+        ))
     await _notify_admins_new_payment(context.bot, pay)
 
 
@@ -1073,10 +1074,10 @@ async def handle_proof_photo(update, context) -> None:
     )
     pay = await db.get_payment(payment_id)
     if pay:
-        await channel_log.proof_submitted(
+        asyncio.create_task(channel_log.proof_submitted(
             update.effective_user.id, float(pay["amount"]),
             pay["coin"], tx_ref, payment_id,
-        )
+        ))
     await _notify_admins_new_payment(context.bot, pay)
 
 
