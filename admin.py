@@ -11,6 +11,7 @@ Commands:
   /userinfo ID        — quick user lookup
   /broadcast TEXT     — quick broadcast (no confirmation)
   /upload SUBL_ID     — prime the bot then send a file on the next message
+  /fulfill ORDER_ID   — prime the bot to deliver a file for a specific order
 
 Bulk upload (easiest way):
   Send a .txt or .csv file directly to the bot.
@@ -30,6 +31,7 @@ Inline panel sections:
   📦 Stock      — per-list counts, add / delete items, upload file
   👥 Users      — lookup, adjust balance, ban / unban
   📋 Orders     — last 20 transactions
+  📦 Deliveries — pending file deliveries awaiting fulfilment
   📢 Broadcast  — type + confirm before sending
 """
 
@@ -232,22 +234,23 @@ def admin_only(fn):
 def admin_home_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📊 Stats",    callback_data="adm_stats"),
-            InlineKeyboardButton("📦 Stock",    callback_data="adm_stock"),
+            InlineKeyboardButton("📊 Stats",      callback_data="adm_stats"),
+            InlineKeyboardButton("📦 Stock",      callback_data="adm_stock"),
         ],
         [
-            InlineKeyboardButton("👥 Users",    callback_data="adm_users"),
-            InlineKeyboardButton("📋 Orders",   callback_data="adm_orders"),
+            InlineKeyboardButton("👥 Users",      callback_data="adm_users"),
+            InlineKeyboardButton("📋 Orders",     callback_data="adm_orders"),
         ],
         [
-            InlineKeyboardButton("💰 Prices",   callback_data="adm_prices"),
-            InlineKeyboardButton("💳 Payments", callback_data="adm_payments"),
+            InlineKeyboardButton("💰 Prices",     callback_data="adm_prices"),
+            InlineKeyboardButton("💳 Payments",   callback_data="adm_payments"),
         ],
         [
-            InlineKeyboardButton("🏷️ Labels",   callback_data="adm_labels"),
-            InlineKeyboardButton("📢 Broadcast", callback_data="adm_broadcast"),
+            InlineKeyboardButton("🏷️ Labels",    callback_data="adm_labels"),
+            InlineKeyboardButton("📢 Broadcast",  callback_data="adm_broadcast"),
         ],
-        [InlineKeyboardButton("❌ Close",        callback_data="adm_close")],
+        [InlineKeyboardButton("📦 Deliveries",    callback_data="adm_deliveries")],
+        [InlineKeyboardButton("❌ Close",          callback_data="adm_close")],
     ])
 
 
@@ -302,17 +305,14 @@ def reorder_kb(cat_id: str) -> InlineKeyboardMarkup:
     for i, s in enumerate(sublists):
         label = db.get_label(f"subl:{s['id']}", s["label"])
         row   = []
-        # Up arrow (disabled at top)
         row.append(InlineKeyboardButton(
             "⬆️" if i > 0 else "  ",
             callback_data=f"adm_moveup:{s['id']}:{cat_id}" if i > 0 else "noop",
         ))
-        # Base name + position
         row.append(InlineKeyboardButton(
             f"{i + 1}. {label}",
             callback_data="noop",
         ))
-        # Down arrow (disabled at bottom)
         row.append(InlineKeyboardButton(
             "⬇️" if i < len(sublists) - 1 else "  ",
             callback_data=f"adm_movedown:{s['id']}:{cat_id}" if i < len(sublists) - 1 else "noop",
@@ -337,7 +337,6 @@ def price_select_kb(subl_id: str, items: list,
             label, callback_data=f"adm_pstoggle:{it['id']}:{subl_id}:{page}"
         )])
 
-    # Pagination navigation
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"adm_pspage:{subl_id}:{page-1}"))
@@ -375,7 +374,6 @@ def upload_list_picker_kb() -> InlineKeyboardMarkup:
 def labels_kb(overrides: dict) -> InlineKeyboardMarkup:
     rows = []
 
-    # ── Editable bot texts ──
     rows.append([InlineKeyboardButton("── Bot Texts ──", callback_data="noop")])
     for key, display in [
         ("welcome_text",       "✏️ Welcome Message"),
@@ -389,7 +387,6 @@ def labels_kb(overrides: dict) -> InlineKeyboardMarkup:
         label = f"🔄 {display}" if key in overrides else display
         rows.append([InlineKeyboardButton(label, callback_data=f"adm_label_edit:{key}")])
 
-    # ── Static menu button labels ──
     rows.append([InlineKeyboardButton("── Menu Buttons ──", callback_data="noop")])
     for key, default in config.RENAMEABLE.items():
         if key.startswith("subl:"):
@@ -405,7 +402,6 @@ def labels_kb(overrides: dict) -> InlineKeyboardMarkup:
         else:
             rows.append([edit_btn])
 
-    # ── Dynamic base labels ──
     rows.append([InlineKeyboardButton("── Bases ──", callback_data="noop")])
     for s in db.get_all_sublists():
         key        = f"subl:{s['id']}"
@@ -430,7 +426,7 @@ def user_detail_kb(user_id: int, banned: bool) -> InlineKeyboardMarkup:
     ban_cb    = f"adm_unban:{user_id}" if banned else f"adm_ban:{user_id}"
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("➕ Add Balance", callback_data=f"adm_badd:{user_id}"),
+            InlineKeyboardButton("➕ Add Balance",    callback_data=f"adm_badd:{user_id}"),
             InlineKeyboardButton("➖ Deduct Balance", callback_data=f"adm_bsub:{user_id}"),
         ],
         [InlineKeyboardButton(ban_label, callback_data=ban_cb)],
@@ -443,7 +439,6 @@ def user_detail_kb(user_id: int, banned: bool) -> InlineKeyboardMarkup:
 # ============================================================
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = update.effective_user.id
-    # Permanent admin — straight in
     if is_admin(uid, context.user_data):
         await update.message.reply_text(
             "🛠️ <b>Admin Panel</b>\n\nChoose a section:",
@@ -451,7 +446,6 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode="HTML",
         )
         return
-    # Not verified yet — ask for password
     if not config.ADMIN_PASSWORD:
         await update.message.reply_text("⚠️ Admin password not configured.")
         return
@@ -464,14 +458,9 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def handle_admin_password(update: Update,
                                 context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    Called from bot.py when a user sends text while adm_awaiting_pw is set.
-    Returns True if handled (regardless of success/fail).
-    """
     context.user_data.pop("adm_awaiting_pw", None)
     password = update.message.text.strip()
 
-    # Delete the password message for security
     try:
         await update.message.delete()
     except Exception:
@@ -489,7 +478,6 @@ async def handle_admin_password(update: Update,
         )
         return True
 
-    # Grant session
     context.user_data["admin_session_expires"] = time.time() + SESSION_HOURS * 3600
     uid = update.effective_user.id
     await channel_log.log(
@@ -521,16 +509,14 @@ async def cmd_credit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     try:
         uid    = int(parts[0])
         amount = Decimal(parts[1])
-        if amount <= 0:
-            raise ValueError
     except (ValueError, InvalidOperation):
-        await update.message.reply_text("Invalid ID or amount.")
+        await update.message.reply_text("Invalid user ID or amount.")
         return
-    await db.ensure_user(uid)
     new_bal = await db.adjust_balance(uid, amount)
     await update.message.reply_text(
-        f"✅ Credited {config.CURRENCY_SYMBOL}{amount:g} to user {uid}.\n"
-        f"New balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}"
+        f"✅ Credited <b>{config.CURRENCY_SYMBOL}{amount:g}</b> to user <code>{uid}</code>.\n"
+        f"New balance: <b>{config.CURRENCY_SYMBOL}{new_bal:.2f}</b>",
+        parse_mode="HTML",
     )
 
 
@@ -544,22 +530,21 @@ async def cmd_deduct(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     try:
         uid    = int(parts[0])
         amount = Decimal(parts[1])
-        if amount <= 0:
-            raise ValueError
     except (ValueError, InvalidOperation):
-        await update.message.reply_text("Invalid ID or amount.")
+        await update.message.reply_text("Invalid user ID or amount.")
         return
     new_bal = await db.adjust_balance(uid, -amount)
     await update.message.reply_text(
-        f"✅ Deducted {config.CURRENCY_SYMBOL}{amount:g} from user {uid}.\n"
-        f"New balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}"
+        f"✅ Deducted <b>{config.CURRENCY_SYMBOL}{amount:g}</b> from user <code>{uid}</code>.\n"
+        f"New balance: <b>{config.CURRENCY_SYMBOL}{new_bal:.2f}</b>",
+        parse_mode="HTML",
     )
 
 
 @admin_only
 async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Usage: /userinfo USER_ID"""
-    parts = (context.args or [])
+    parts = context.args or []
     if not parts:
         await update.message.reply_text("Usage: /userinfo USER_ID")
         return
@@ -580,22 +565,75 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 @admin_only
-@admin_only
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Usage: /broadcast YOUR MESSAGE HERE"""
-    if not context.args:
-        await update.message.reply_text("Usage: /broadcast YOUR MESSAGE")
+    """Usage: /broadcast MESSAGE — quick broadcast without confirmation."""
+    msg = " ".join(context.args or []).strip()
+    if not msg:
+        await update.message.reply_text("Usage: /broadcast your message here")
         return
-    msg      = " ".join(context.args)
-    admin_id = update.effective_user.id
-    chat_id  = update.effective_chat.id
-    await update.message.reply_text("📢 Sending broadcast… Please wait.")
     import asyncio as _asyncio
-    _asyncio.create_task(_do_broadcast(context.bot, msg, admin_id, chat_id))
+    status = await update.message.reply_text("📢 Sending…")
+    _asyncio.create_task(
+        _do_broadcast(context.bot, msg, update.effective_user.id, update.effective_chat.id)
+    )
 
 
 # ============================================================
-#  Inline panel router
+#  /fulfill command — admin manually starts a file delivery
+# ============================================================
+@admin_only
+async def cmd_fulfill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Usage: /fulfill ORDER_ID
+    Puts admin into file-delivery mode for that order.
+    Admin then sends any file and the bot delivers it to the buyer.
+    """
+    parts = context.args or []
+    if not parts:
+        await update.message.reply_text(
+            "Usage: /fulfill <b>ORDER_ID</b>\n\n"
+            "Then send the file to deliver to the buyer.\n\n"
+            "Tip: use /admin → 📦 Deliveries to see all pending orders.",
+            parse_mode="HTML",
+        )
+        return
+    order_id = parts[0].strip()
+    order = await db.get_order(order_id)
+    if not order:
+        await update.message.reply_text(
+            f"❌ Order <code>{order_id}</code> not found.",
+            parse_mode="HTML",
+        )
+        return
+    if order["status"] == "completed":
+        await update.message.reply_text(
+            f"✅ Order <code>{order_id}</code> has already been fulfilled.",
+            parse_mode="HTML",
+        )
+        return
+
+    context.user_data["adm_awaiting"]        = "fulfill_file"
+    context.user_data["adm_fulfill_order_id"] = order_id
+
+    bin_  = order.get("bin", "?")
+    year  = order.get("year", "?")
+    code  = order.get("code", "?")
+    await update.message.reply_text(
+        f"📤 <b>Ready to Deliver — Order <code>{order_id}</code></b>\n\n"
+        f"Buyer:  <code>{order['user_id']}</code>\n"
+        f"Item:   {bin_} - {year} - {code}\n"
+        f"Price:  {config.CURRENCY_SYMBOL}{float(order['amount']):g}\n\n"
+        "Now send the file (document, photo, etc.) to deliver to the buyer.\n"
+        "The bot will forward it with a full purchase receipt.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="adm_menu")
+        ]]),
+        parse_mode="HTML",
+    )
+
+
+# ============================================================
+#  Inline button router
 # ============================================================
 @admin_only
 async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -617,20 +655,77 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         s = await db.get_stats()
         text = (
             "📊 <b>Stats</b>\n\n"
-            f"👤 Total users:    <b>{s['total_users']}</b>\n"
-            f"🚫 Banned users:   <b>{s['banned_users']}</b>\n"
-            f"📦 Stock (live):   <b>{s['total_stock']}</b>\n"
-            f"✅ Sold items:     <b>{s['sold_stock']}</b>\n"
-            f"🛒 Total orders:   <b>{s['total_orders']}</b>\n"
-            f"💰 Total revenue:  <b>{config.CURRENCY_SYMBOL}{s['total_revenue']:.2f}</b>\n"
-            f"⏳ Pending topups: <b>{s['pending_pays']}</b>"
+            f"👤 Total users:       <b>{s['total_users']}</b>\n"
+            f"🚫 Banned users:      <b>{s['banned_users']}</b>\n"
+            f"📦 Stock (live):      <b>{s['total_stock']}</b>\n"
+            f"✅ Sold items:        <b>{s['sold_stock']}</b>\n"
+            f"🛒 Total orders:      <b>{s['total_orders']}</b>\n"
+            f"📦 Pending delivery:  <b>{s['pending_deliveries']}</b>\n"
+            f"💰 Total revenue:     <b>{config.CURRENCY_SYMBOL}{s['total_revenue']:.2f}</b>\n"
+            f"⏳ Pending topups:    <b>{s['pending_pays']}</b>"
         )
         await _safe_edit(query, text, back_to_admin())
+
+    # ---- Deliveries ----
+    elif data == "adm_deliveries":
+        orders = await db.get_pending_delivery_orders(50)
+        if not orders:
+            await _safe_edit(query,
+                "📦 <b>Pending Deliveries</b>\n\n✅ No pending deliveries right now!",
+                back_to_admin())
+            return
+        lines = [f"📦 <b>Pending Deliveries</b> ({len(orders)})\n"]
+        rows  = []
+        for o in orders:
+            bin_  = o.get("bin") or "?"
+            year  = o.get("year") or "?"
+            code  = o.get("code") or "?"
+            ts    = o["created_at"].strftime("%d/%m %H:%M")
+            lines.append(
+                f"• <code>{o['id']}</code>  User: <code>{o['user_id']}</code>\n"
+                f"  {bin_} - {year} - {code}  "
+                f"{config.CURRENCY_SYMBOL}{o['amount']:.2f}  <i>{ts}</i>"
+            )
+            rows.append([InlineKeyboardButton(
+                f"📤 Deliver #{o['id']}  ({bin_} - {year})",
+                callback_data=f"adm_fulfill_order:{o['id']}",
+            )])
+        rows.append([InlineKeyboardButton("⬅️ Admin Menu", callback_data="adm_menu")])
+        await _safe_edit(query, "\n".join(lines), InlineKeyboardMarkup(rows))
+
+    # ---- Fulfill order (admin taps "Upload File for Order #ID") ----
+    elif data.startswith("adm_fulfill_order:"):
+        order_id = data.split(":", 1)[1]
+        order = await db.get_order(order_id)
+        if not order:
+            await query.answer("Order not found.", show_alert=True)
+            return
+        if order["status"] == "completed":
+            await query.answer("This order has already been fulfilled.", show_alert=True)
+            return
+
+        context.user_data["adm_awaiting"]         = "fulfill_file"
+        context.user_data["adm_fulfill_order_id"] = order_id
+
+        bin_  = order.get("bin", "?")
+        year  = order.get("year", "?")
+        code  = order.get("code", "?")
+        await _safe_edit(
+            query,
+            f"📤 <b>Ready to Deliver — Order <code>{order_id}</code></b>\n\n"
+            f"Buyer:  <code>{order['user_id']}</code>\n"
+            f"Item:   {bin_} - {year} - {code}\n"
+            f"Price:  {config.CURRENCY_SYMBOL}{float(order['amount']):g}\n\n"
+            "Now send the file (document, photo, etc.) to deliver to the buyer.\n"
+            "The bot will forward it with a full purchase receipt.",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="adm_menu")
+            ]]),
+        )
 
     # ---- Stock overview ----
     elif data == "adm_stock":
         counts = await db.get_stock_counts()
-        # Build overview with Add New Base button per category
         rows = []
         for cat in config.CATEGORIES:
             sublists = db.get_sublists(cat["id"])
@@ -658,7 +753,6 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         cat_id = data.split(":", 1)[1]
         cat    = next((c for c in config.CATEGORIES if c["id"] == cat_id), None)
         label  = cat["label"] if cat else cat_id.upper()
-        sublists = db.get_sublists(cat_id)
         await _safe_edit(query,
             f"↕️ <b>Reorder Bases — {label}</b>\n\n"
             f"Use ⬆️ ⬇️ to move bases up or down.\n"
@@ -711,8 +805,8 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     elif data.startswith("adm_renamebase:"):
         subl_id = data.split(":", 1)[1]
         current = _subl_label(subl_id)
-        context.user_data["adm_awaiting"]        = "rename_base"
-        context.user_data["adm_rename_subl"]     = subl_id
+        context.user_data["adm_awaiting"]    = "rename_base"
+        context.user_data["adm_rename_subl"] = subl_id
         await _safe_edit(query,
             f"✏️ <b>Rename Base</b>\n\n"
             f"Base:    <code>{subl_id}</code>\n"
@@ -724,8 +818,8 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     elif data.startswith("adm_addbase:"):
         cat_id = data.split(":", 1)[1]
-        context.user_data["adm_awaiting"]  = "add_base_id"
-        context.user_data["adm_base_cat"]  = cat_id
+        context.user_data["adm_awaiting"] = "add_base_id"
+        context.user_data["adm_base_cat"] = cat_id
         await _safe_edit(query,
             f"➕ <b>Add New Base to {cat_id.upper()}</b>\n\n"
             "Step 1 of 2 — Send the base <b>ID</b>\n\n"
@@ -858,8 +952,8 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if not sel:
             await query.answer("No items selected!", show_alert=True)
             return
-        context.user_data["adm_awaiting"]         = "price_selected_items"
-        context.user_data["adm_price_sel_subl"]   = subl_id
+        context.user_data["adm_awaiting"]       = "price_selected_items"
+        context.user_data["adm_price_sel_subl"] = subl_id
         n = len(sel)
         await _safe_edit(query,
             f"💰 <b>Set Price for {n} Selected Item{'s' if n > 1 else ''}</b>\n\n"
@@ -895,7 +989,6 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         await db.remove_stock_item(item_id)
         await query.answer("✅ Item deleted.", show_alert=False)
-        # refresh the list
         subl_id = item["subl_id"]
         items   = await db.get_stock(subl_id)
         label   = _subl_label(subl_id)
@@ -965,8 +1058,8 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         subl_id = data.split(":", 1)[1]
         label   = _subl_label(subl_id)
         items   = await db.get_stock(subl_id)
-        context.user_data["adm_awaiting"]      = "set_price"
-        context.user_data["adm_price_subl"]    = subl_id
+        context.user_data["adm_awaiting"]   = "set_price"
+        context.user_data["adm_price_subl"] = subl_id
         await _safe_edit(
             query,
             f"💰 <b>Change Price — {label}</b>\n\n"
@@ -1037,13 +1130,16 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         lines = ["📋 <b>Last 20 Orders</b>\n"]
         for o in orders:
-            bin_  = o.get("bin") or "?"
-            year  = o.get("year") or "?"
-            code  = o.get("code") or "?"
+            bin_   = o.get("bin") or "?"
+            year   = o.get("year") or "?"
+            code   = o.get("code") or "?"
+            status = o.get("status", "?")
+            status_icon = "✅" if status == "completed" else "⏳"
             lines.append(
                 f"• <code>{o['user_id']}</code>  "
                 f"{bin_} - {year} - {code}  "
                 f"{config.CURRENCY_SYMBOL}{o['amount']:.2f}  "
+                f"{status_icon}  "
                 f"<i>{o['created_at'].strftime('%d/%m %H:%M')}</i>"
             )
         await _safe_edit(query, "\n".join(lines), back_to_admin())
@@ -1163,7 +1259,6 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         bal = await db.get_balance(uid)
         await channel_log.payment_approved(uid, float(amt), float(bal), query.from_user.id)
         await query.answer(f"✅ Approved! {config.CURRENCY_SYMBOL}{amt:.2f} credited.", show_alert=True)
-        # Notify the user
         try:
             await context.bot.send_message(
                 uid,
@@ -1174,7 +1269,6 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             )
         except Exception:
             pass
-        # Refresh payments list
         pending = await db.get_pending_payments()
         if not pending:
             await _safe_edit(query, "💳 <b>Payments</b>\n\nNo pending payments. ✅",
@@ -1191,7 +1285,6 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         uid = result["user_id"]
         await channel_log.payment_rejected(uid, float(result["amount"]), query.from_user.id)
         await query.answer("❌ Rejected.", show_alert=True)
-        # Use admin-configurable rejection message
         default_reject_msg = (
             "❌ <b>Payment Rejected</b>\n\n"
             "Your top-up could not be verified. This may be due to an incomplete payment "
@@ -1226,8 +1319,8 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         key     = data.split(":", 1)[1]
         default = config.default_label(key)
         current = db.get_label(key, default)
-        context.user_data["adm_awaiting"]   = "label_edit"
-        context.user_data["adm_label_key"]  = key
+        context.user_data["adm_awaiting"]  = "label_edit"
+        context.user_data["adm_label_key"] = key
         long_text_keys = {"welcome_text", "refund_text", "rules_text", "store_cat_text",
                           "store_subl_text", "store_items_text", "store_select_text"}
         if key in long_text_keys:
@@ -1243,8 +1336,6 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 f"🏷️ <b>Rename Button: {key}</b>\n\n"
                 f"Current name: <b>{current}</b>\n\n"
                 "⚠️ <b>This is the BUTTON NAME only</b> — keep it short!\n\n"
-                "💡 To change the <b>text shown when users tap this button</b>:\n"
-                "Go back → Labels → <b>── Bot Texts ──</b> section at the top\n\n"
                 "Send the new button name (max 64 chars):"
             )
         else:
@@ -1253,8 +1344,7 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 f"Key: <code>{key}</code>\n"
                 f"Current: <b>{current}</b>\n"
                 f"Default: <i>{default}</i>\n\n"
-                "Send the new display name now.\n"
-                "You can use emojis — e.g. <code>🗂️ Fresh Files</code>"
+                "Send the new display name now."
             )
         await _safe_edit(
             query, hint,
@@ -1300,7 +1390,6 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         admin_id = query.from_user.id
         chat_id  = query.message.chat_id
         await _safe_edit(query, "📢 <b>Sending to all users…</b>\n\nPlease wait.", back_to_admin())
-        # Run broadcast in background so it doesn't block or timeout
         import asyncio as _asyncio
         _asyncio.create_task(
             _do_broadcast(context.bot, msg, admin_id, chat_id)
@@ -1310,6 +1399,9 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         msg_key = data.split(":", 1)[1]
         context.bot_data.pop(msg_key, None)
         await _safe_edit(query, "❌ Broadcast cancelled.", admin_home_kb())
+
+    elif data == "noop":
+        pass
 
 
 # ============================================================
@@ -1351,8 +1443,14 @@ async def adm_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _handle_label_edit(update, context)
     elif awaiting == "set_price":
         await _handle_set_price(update, context)
-    elif awaiting == "upload_file":
+    elif awaiting == "fulfill_file":
         # File expected — remind admin to send the actual file
+        await update.message.reply_text(
+            "⚠️ Please send a file (document, photo, etc.) to deliver to the buyer,\n"
+            "not a text message.",
+            parse_mode="HTML",
+        )
+    elif awaiting == "upload_file":
         await update.message.reply_text(
             "⚠️ Please send a <code>.txt</code> or <code>.csv</code> file, "
             "not a text message.",
@@ -1391,7 +1489,6 @@ async def _handle_bin_price_bin(update, context) -> None:
     if not bin_.isdigit() or len(bin_) < 4:
         await update.message.reply_text("⚠️ Send a valid BIN number, e.g. <code>492181</code>", parse_mode="HTML")
         return
-    # Check how many items exist with this BIN
     async with db._pool.acquire() as con:
         count = await con.fetchval(
             "SELECT COUNT(*) FROM stock WHERE bin=$1 AND sold=FALSE", bin_
@@ -1403,8 +1500,7 @@ async def _handle_bin_price_bin(update, context) -> None:
     context.user_data["adm_awaiting"]  = "bin_price_amount"
     context.user_data["adm_price_bin"] = bin_
     await update.message.reply_text(
-        f"🔢 BIN <code>{bin_}</code> has <b>{count}</b> unsold items.\n\n"
-        f"Send the new price:",
+        f"🔢 BIN <code>{bin_}</code> has <b>{count}</b> unsold items.\n\nSend the new price:",
         parse_mode="HTML",
     )
 
@@ -1431,7 +1527,6 @@ async def _handle_individual_price_search(update, context) -> None:
     if not bin_.isdigit() or len(bin_) < 4:
         await update.message.reply_text("⚠️ Send a valid BIN number.", parse_mode="HTML")
         return
-    # Fetch all items with this BIN
     async with db._pool.acquire() as con:
         rows = await con.fetch(
             "SELECT id,bin,year,code,price,subl_id FROM stock "
@@ -1470,7 +1565,6 @@ async def _handle_price_selected_items(update, context) -> None:
     if not sel:
         await update.message.reply_text("No items were selected.")
         return
-    # Update each selected item
     updated = 0
     async with db._pool.acquire() as con:
         for item_id in sel:
@@ -1523,7 +1617,6 @@ async def _handle_rename_base(update, context) -> None:
         await update.message.reply_text("❌ Name cannot be empty.")
         return
     old_name = _subl_label(subl_id)
-    # Update both: the label override table AND the sublists table label column
     await db.set_label(f"subl:{subl_id}", new_name)
     async with db._pool.acquire() as con:
         await con.execute(
@@ -1543,31 +1636,26 @@ async def _handle_rename_base(update, context) -> None:
 
 
 async def _handle_add_base_id(update, context) -> None:
-    import re
     raw    = update.message.text.strip().lower()
     cat_id = context.user_data.get("adm_base_cat", "ff")
 
-    # Validate ID
     if not re.match(r'^[a-z0-9][a-z0-9\-]{0,29}$', raw):
         await update.message.reply_text(
             "❌ Invalid ID. Use only lowercase letters, numbers, hyphens.\n"
-            "Examples: <code>dd-15th</code>  <code>weekly</code>  <code>vip</code>\n\n"
-            "Try again:",
+            "Examples: <code>dd-15th</code>  <code>weekly</code>  <code>vip</code>\n\nTry again:",
             parse_mode="HTML",
         )
         return
-    # Check not already taken
     existing = db.find_sublist_by_id(raw)
     if existing:
         await update.message.reply_text(
-            f"❌ A base with ID <code>{raw}</code> already exists.\n"
-            "Please choose a different ID:",
+            f"❌ A base with ID <code>{raw}</code> already exists.\nPlease choose a different ID:",
             parse_mode="HTML",
         )
         return
 
-    context.user_data["adm_base_id"]      = raw
-    context.user_data["adm_awaiting"]     = "add_base_label"
+    context.user_data["adm_base_id"]  = raw
+    context.user_data["adm_awaiting"] = "add_base_label"
     await update.message.reply_text(
         f"✅ ID set: <code>{raw}</code>\n\n"
         "Step 2 of 2 — Send the <b>display name</b> for this base\n\n"
@@ -1578,8 +1666,8 @@ async def _handle_add_base_id(update, context) -> None:
 
 
 async def _handle_add_base_label(update, context) -> None:
-    label  = update.message.text.strip()
-    cat_id = context.user_data.get("adm_base_cat", "ff")
+    label   = update.message.text.strip()
+    cat_id  = context.user_data.get("adm_base_cat", "ff")
     subl_id = context.user_data.get("adm_base_id", "")
     context.user_data["adm_awaiting"] = None
 
@@ -1601,8 +1689,7 @@ async def _handle_add_base_label(update, context) -> None:
         f"ID:       <code>{subl_id}</code>\n"
         f"Name:     <b>{label}</b>\n"
         f"Category: {cat_id.upper()}\n\n"
-        "It's now live in the store. Use /upload or ➕ Add Item to add stock.\n"
-        "Use /rename to rename it anytime.",
+        "It's now live in the store. Use /upload or ➕ Add Item to add stock.",
         parse_mode="HTML",
     )
 
@@ -1610,7 +1697,6 @@ async def _handle_add_base_label(update, context) -> None:
 async def _handle_add_item(update, context) -> None:
     subl_id = context.user_data.get("adm_subl", "")
     raw     = update.message.text.strip()
-    # Fetch live price first — uploads never reset it
     current_price = await db.get_sublist_price(subl_id)
     rows, skipped, errors = _parse_stock_file(raw, subl_id, current_price)
 
@@ -1703,23 +1789,33 @@ async def _handle_set_price(update, context) -> None:
         reply_markup=stock_list_kb(subl_id, items),
         parse_mode="HTML",
     )
+
+
+async def _handle_broadcast_compose(update, context) -> None:
+    """Admin typed the broadcast message — show preview with Confirm/Cancel."""
     context.user_data["adm_awaiting"] = None
-    msg     = update.message.text.strip()
-    msg_key = f"bc_{update.message.message_id}"
+    msg = update.message.text.strip()
+    if not msg:
+        await update.message.reply_text("Message cannot be empty.")
+        return
+
+    import uuid as _uuid
+    msg_key = _uuid.uuid4().hex[:12]
     context.bot_data[msg_key] = msg
 
-    preview = msg[:300] + ("…" if len(msg) > 300 else "")
-    user_count = len(await db.get_all_user_ids())
+    user_ids = await db.get_all_user_ids()
+    count    = len(user_ids)
 
     await update.message.reply_text(
-        f"📢 <b>Broadcast Preview</b>\n\n"
-        f"{preview}\n\n"
-        f"This will be sent to <b>{user_count}</b> user(s). Confirm?",
+        f"📢 <b>Broadcast Preview</b>\n"
+        f"<code>──────────────────────</code>\n"
+        f"{msg}\n"
+        f"<code>──────────────────────</code>\n"
+        f"Recipients: <b>{count}</b> users\n\n"
+        "Confirm to send to all users?",
         reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Send", callback_data=f"adm_bc_confirm:{msg_key}"),
-                InlineKeyboardButton("❌ Cancel", callback_data=f"adm_bc_cancel:{msg_key}"),
-            ]
+            [InlineKeyboardButton("✅ Send to All",  callback_data=f"adm_bc_confirm:{msg_key}")],
+            [InlineKeyboardButton("❌ Cancel",        callback_data=f"adm_bc_cancel:{msg_key}")],
         ]),
         parse_mode="HTML",
     )
@@ -1734,8 +1830,6 @@ async def _handle_label_edit(update, context) -> None:
     if not new_value:
         await update.message.reply_text("Name cannot be empty. No changes made.")
         return
-    # Only button labels (menu:, cat:, subl:) have a 64-char limit
-    # Everything else (text content, rules, welcome) has NO limit
     is_button = any(key.startswith(p) for p in ("menu:", "cat:", "subl:"))
     if is_button and len(new_value) > 64:
         await update.message.reply_text(
@@ -1761,7 +1855,110 @@ async def _handle_label_edit(update, context) -> None:
 
 
 # ============================================================
-#  /rename quick command
+#  File delivery sub-handler (Step 3 of the workflow)
+# ============================================================
+async def _handle_fulfill_file(update, context, file_id: str,
+                                file_type: str = "document") -> None:
+    """
+    Called when admin sends a file while adm_awaiting == 'fulfill_file'.
+    Delivers the file to the buyer with a full receipt caption.
+    """
+    order_id = context.user_data.pop("adm_fulfill_order_id", None)
+    context.user_data["adm_awaiting"] = None
+
+    if not order_id:
+        await update.message.reply_text("⚠️ No order selected. Use /fulfill ORDER_ID first.")
+        return
+
+    order = await db.get_order(order_id)
+    if not order:
+        await update.message.reply_text(f"❌ Order <code>{order_id}</code> not found.", parse_mode="HTML")
+        return
+    if order["status"] == "completed":
+        await update.message.reply_text(
+            f"⚠️ Order <code>{order_id}</code> has already been fulfilled.", parse_mode="HTML"
+        )
+        return
+
+    buyer_id = order["user_id"]
+    bin_     = order.get("bin", "?")
+    year     = order.get("year", "?")
+    code     = order.get("code", "?")
+    price    = order.get("amount", 0)
+    subl_id  = order.get("subl_id", "?")
+
+    # Get updated buyer balance after purchase
+    from decimal import Decimal as _D
+    import db as _db
+    new_bal = await _db.get_balance(buyer_id)
+
+    receipt_caption = (
+        "✅ <b>Purchase Successful!</b>\n\n"
+        f"💳 BIN:              <b>{bin_}</b>\n"
+        f"📦 Item:             {bin_} - {year} - {code}\n"
+        f"💷 Price:            <b>{config.CURRENCY_SYMBOL}{float(price):g}</b>\n"
+        f"💰 Remaining balance: <b>{config.CURRENCY_SYMBOL}{new_bal:.2f}</b>\n\n"
+        "If there are any issues, type /refund and follow the instructions"
+    )
+
+    # Deliver file to buyer
+    delivered = False
+    try:
+        if file_type == "photo":
+            await context.bot.send_photo(
+                chat_id=buyer_id,
+                photo=file_id,
+                caption=receipt_caption,
+                parse_mode="HTML",
+            )
+        else:
+            await context.bot.send_document(
+                chat_id=buyer_id,
+                document=file_id,
+                caption=receipt_caption,
+                parse_mode="HTML",
+            )
+        delivered = True
+    except Exception as e:
+        logger.error("Could not deliver file to buyer %s: %s", buyer_id, e)
+        await update.message.reply_text(
+            f"❌ <b>Delivery failed</b>\n\n"
+            f"Could not send file to buyer <code>{buyer_id}</code>.\n"
+            f"Error: <code>{e}</code>\n\n"
+            "The order status has NOT been updated. Please try again.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Mark order as completed
+    await db.set_order_status(order_id, "completed", delivery_file_id=file_id)
+
+    # Confirm to admin
+    await update.message.reply_text(
+        f"✅ <b>File Delivered!</b>\n\n"
+        f"Order:  <code>{order_id}</code>\n"
+        f"Buyer:  <code>{buyer_id}</code>\n"
+        f"Item:   {bin_} - {year} - {code}\n\n"
+        "The buyer has received the file and receipt. Order marked as completed.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("📦 View Deliveries", callback_data="adm_deliveries"),
+            InlineKeyboardButton("⬅️ Admin Menu",      callback_data="adm_menu"),
+        ]]),
+        parse_mode="HTML",
+    )
+
+    # Log the delivery
+    await channel_log.log(
+        f"📦 <b>File Delivered</b>\n"
+        f"Order: <code>{order_id}</code>\n"
+        f"Buyer: <code>{buyer_id}</code>\n"
+        f"Item: {bin_} - {year} - {code}  {config.CURRENCY_SYMBOL}{float(price):g}\n"
+        f"Admin: <code>{update.effective_user.id}</code>"
+    )
+
+
+# ============================================================
+#  Quick commands
 # ============================================================
 @admin_only
 async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1796,7 +1993,6 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("⚠️ Invalid price. Example: <code>/price all 30</code>", parse_mode="HTML")
         return
 
-    # ── Global ──
     if target == "all":
         count = await db.set_global_price(price)
         await update.message.reply_text(
@@ -1806,7 +2002,6 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    # ── By BIN ──
     if target.startswith("bin:"):
         bin_ = target[4:]
         count = await db.set_bin_price(bin_, price)
@@ -1817,15 +2012,13 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    # ── By Base (ID or label) ──
     matched_id = None
     for s in db.get_all_sublists():
         if s["id"] == target:
             matched_id = s["id"]; break
         current = db.get_label(f"subl:{s['id']}", s["label"])
-        import re as _re
-        if _re.sub(r'[^\w\s-]', '', current).strip().lower() == \
-           _re.sub(r'[^\w\s-]', '', target).strip().lower():
+        if re.sub(r'[^\w\s-]', '', current).strip().lower() == \
+           re.sub(r'[^\w\s-]', '', target).strip().lower():
             matched_id = s["id"]; break
 
     if not matched_id:
@@ -1844,17 +2037,11 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode="HTML",
     )
 
-    """
-    Usage:  /rename KEY New display name
-    Examples:
-      /rename subl:dd-28th 🔸 28th Base
-      /rename cat:ff 🗓️ Fresh Files
-      /rename menu:store 🏪 Shop
-    Run /rename with no arguments to see all valid keys.
-    """
-    args = context.args or []
 
-    # No args → show all valid keys + current values
+@admin_only
+async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Usage: /rename KEY New name  — run /rename alone to see all keys."""
+    args = context.args or []
     if not args:
         lines = ["🏷️ <b>Renameable Labels</b>\n",
                  "Usage: <code>/rename KEY New Name</code>\n"]
@@ -1862,33 +2049,21 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             current = db.get_label(key, default)
             changed = " 🔄" if current != default else ""
             lines.append(f"<code>{key}</code>{changed}\n  → {current}")
-        await update.message.reply_text(
-            "\n".join(lines), parse_mode="HTML"
-        )
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         return
-
     key       = args[0].lower()
     new_value = " ".join(args[1:]).strip()
-
     if key not in config.RENAMEABLE:
         valid = "\n".join(f"  <code>{k}</code>" for k in config.RENAMEABLE)
         await update.message.reply_text(
-            f"❌ Unknown key: <code>{key}</code>\n\n"
-            f"Valid keys:\n{valid}",
-            parse_mode="HTML",
-        )
+            f"❌ Unknown key: <code>{key}</code>\n\nValid keys:\n{valid}",
+            parse_mode="HTML")
         return
-
     if not new_value:
         await update.message.reply_text(
-            "Please provide the new name after the key.\n"
-            f"Example: <code>/rename {key} 🔸 New Name</code>",
-            parse_mode="HTML",
-        )
+            f"Please provide the new name.\nExample: <code>/rename {key} 🔸 New Name</code>",
+            parse_mode="HTML")
         return
-
-
-
     old_value = db.get_label(key, config.default_label(key))
     await db.set_label(key, new_value)
     await update.message.reply_text(
@@ -1896,8 +2071,149 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"  Before: <i>{old_value}</i>\n"
         f"  After:  <b>{new_value}</b>\n\n"
         "Live immediately — no restart needed.",
+        parse_mode="HTML")
+
+
+async def cmd_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Usage: /upload SUBL_ID  — bot will then wait for a file."""
+    parts = context.args or []
+    if not parts:
+        await update.message.reply_text(
+            "Usage: /upload <b>LIST_ID</b>\n"
+            "Then send your .txt or .csv file as the next message.\n\n"
+            "Available list IDs:\n" +
+            "\n".join(
+                f"  <code>{s['id']}</code>  {s['label']}"
+                for cat in config.CATEGORIES
+                for s in cat.get("sublists", [])
+            ),
+            parse_mode="HTML",
+        )
+        return
+    subl_id = parts[0].lower()
+    valid = [s["id"] for cat in config.CATEGORIES for s in cat.get("sublists", [])]
+    if subl_id not in valid:
+        await update.message.reply_text(
+            f"❌ Unknown list ID: <code>{subl_id}</code>\n"
+            "Valid IDs: " + ", ".join(f"<code>{i}</code>" for i in valid),
+            parse_mode="HTML",
+        )
+        return
+    context.user_data["adm_awaiting"]    = "upload_file"
+    context.user_data["adm_upload_subl"] = subl_id
+    label = _subl_label(subl_id)
+    await update.message.reply_text(
+        f"📤 Ready to import into <b>{label}</b>.\n\n"
+        "Now send your <code>.txt</code> or <code>.csv</code> file.\n\n"
+        "<b>Required format</b> (one item per line):\n"
+        "<code>BIN|YEAR|CODE|PRICE|CONTENT</code>\n"
+        "e.g. <code>459667|2012|Ex3|5|4597xx 09/28 123 John Doe</code>",
         parse_mode="HTML",
     )
+
+
+@admin_only
+async def cmd_testlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a test message to the log channel to verify it's working."""
+    if not config.LOG_CHANNEL_ID:
+        await update.message.reply_text(
+            "⚠️ <b>LOG_CHANNEL_ID is not set.</b>\n\n"
+            "Add it in Railway → Variables:\n"
+            "<code>LOG_CHANNEL_ID = -1001234567890</code>",
+            parse_mode="HTML",
+        )
+        return
+    try:
+        await context.bot.send_message(
+            config.LOG_CHANNEL_ID,
+            f"🔔 <b>Log Channel Test</b>\n\n"
+            f"✅ Connected successfully!\n"
+            f"🕐 {datetime.now(timezone.utc).strftime('%d/%m %H:%M UTC')}",
+            parse_mode="HTML",
+        )
+        await update.message.reply_text(
+            f"✅ Test message sent to <code>{config.LOG_CHANNEL_ID}</code>.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ <b>Failed to send to log channel</b>\n\nError: <code>{e}</code>",
+            parse_mode="HTML",
+        )
+
+
+# ============================================================
+#  Document (file) handler
+# ============================================================
+@admin_only
+async def adm_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles file uploads from admin.
+    - If adm_awaiting == 'fulfill_file': deliver to buyer (any file type)
+    - Otherwise: bulk stock import (.txt / .csv)
+    Also handles photos when adm_awaiting == 'fulfill_file'.
+    """
+    doc = update.message.document
+
+    # ── File delivery for a pending order ──
+    if context.user_data.get("adm_awaiting") == "fulfill_file":
+        if doc:
+            await _handle_fulfill_file(update, context, doc.file_id, file_type="document")
+        return
+
+    # ── Bulk stock import ──
+    if not doc:
+        return
+
+    fname = (doc.file_name or "").lower()
+    mime  = (doc.mime_type or "").lower()
+    is_text = (fname.endswith(".txt") or fname.endswith(".csv")
+               or "text" in mime or mime == "application/octet-stream")
+    if not is_text:
+        await update.message.reply_text(
+            "⚠️ Please send a <code>.txt</code> or <code>.csv</code> file.",
+            parse_mode="HTML",
+        )
+        return
+
+    if doc.file_size and doc.file_size > 5 * 1024 * 1024:
+        await update.message.reply_text("⚠️ File too large (max 5 MB).")
+        return
+
+    caption = (update.message.caption or "").strip().lower()
+
+    if context.user_data.get("adm_awaiting") == "upload_file":
+        subl_id = context.user_data.pop("adm_upload_subl", "")
+        context.user_data["adm_awaiting"] = None
+        await _run_upload(update.message, subl_id, doc.file_id, context)
+        return
+
+    subl_id = _find_subl_by_name(caption)
+    if subl_id:
+        await _run_upload(update.message, subl_id, doc.file_id, context)
+        return
+
+    context.user_data["adm_pending_file_id"] = doc.file_id
+    await update.message.reply_text(
+        "📂 File received.\n\n"
+        "Which list should this be imported into?\n"
+        "<i>Tip: next time add the list ID as the file caption to skip this step.</i>",
+        reply_markup=upload_list_picker_kb(),
+        parse_mode="HTML",
+    )
+
+
+@admin_only
+async def adm_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles photo uploads from admin — used for file delivery to buyers."""
+    if context.user_data.get("adm_awaiting") != "fulfill_file":
+        return
+    photo = update.message.photo
+    if not photo:
+        return
+    # Use highest-resolution photo
+    file_id = photo[-1].file_id
+    await _handle_fulfill_file(update, context, file_id, file_type="photo")
 
 
 # ============================================================
@@ -1911,24 +2227,16 @@ def _subl_label(subl_id: str) -> str:
 
 
 def _find_subl_by_name(text: str) -> str | None:
-    """
-    Match free text to a sublist ID.
-    Tries exact ID match first, then partial label match.
-    e.g. "dd-28th" → "dd-28th"  |  "DD28" → "dd-28th"  |  "28th" → "dd-28th"
-    """
     if not text:
         return None
     lower = text.lower().strip()
     all_subls = [s for cat in config.CATEGORIES for s in cat.get("sublists", [])]
-    # Exact ID
     for s in all_subls:
         if s["id"] == lower:
             return s["id"]
-    # Partial ID
     for s in all_subls:
         if lower in s["id"] or s["id"] in lower:
             return s["id"]
-    # Partial label (strip emoji)
     for s in all_subls:
         clean = s["label"].encode("ascii", "ignore").decode().lower().strip()
         if lower in clean or clean in lower:
@@ -1964,7 +2272,6 @@ async def _safe_edit(query, text, reply_markup) -> None:
             raise
 
 
-
 # ============================================================
 #  File parser
 # ============================================================
@@ -1988,16 +2295,6 @@ def _generate_items(bin_: str, price: Decimal,
 
 def _parse_stock_file(raw: str, subl_id: str,
                       current_price: Decimal | None = None) -> tuple[list[tuple], int, list[str]]:
-    """
-    PRICE RULE: If upload line has no price → use current_price (list live price).
-    This means uploading NEVER resets a list's price.
-
-    FORMAT A  BIN|SEED|CODE x[N]         generate N items at current_price
-    FORMAT A  BIN|SEED|CODE|PRICE x[N]   generate N items at PRICE
-    FORMAT B  BIN|SEED|CODE              generate 1 item  at current_price  (no multiplier)
-    FORMAT B  BIN|SEED|CODE|PRICE        generate 1 item  at PRICE
-    FORMAT C  BIN|YEAR|CODE|PRICE|DATA   direct import, 5+ fields, no generation
-    """
     lines      = [l.rstrip() for l in raw.splitlines()]
     data_lines = [l for l in lines if l.strip() and not l.startswith("#")]
     if not data_lines:
@@ -2066,6 +2363,8 @@ def _parse_stock_file(raw: str, subl_id: str,
             rows.append((uuid.uuid4().hex[:8], subl_id, bin_, year, code, price, content))
 
     return rows, skipped, errors
+
+
 async def _run_upload(message, subl_id: str, file_id: str, context) -> None:
     """Download the file, parse it, bulk-insert, reply with a report."""
     label = _subl_label(subl_id)
@@ -2077,7 +2376,6 @@ async def _run_upload(message, subl_id: str, file_id: str, context) -> None:
     try:
         tg_file = await context.bot.get_file(file_id)
         raw_bytes = await tg_file.download_as_bytearray()
-        # Decode — try UTF-8, fall back to latin-1.
         try:
             raw_text = raw_bytes.decode("utf-8")
         except UnicodeDecodeError:
@@ -2116,262 +2414,8 @@ async def _run_upload(message, subl_id: str, file_id: str, context) -> None:
     await status_msg.edit_text("\n".join(report_lines), parse_mode="HTML")
 
 
-# ============================================================
-#  /upload command
-# ============================================================
-@admin_only
-@admin_only
-async def cmd_testlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a test message to the log channel to verify it's working."""
-    if not config.LOG_CHANNEL_ID:
-        await update.message.reply_text(
-            "⚠️ <b>LOG_CHANNEL_ID is not set.</b>\n\n"
-            "Add it in Railway → Variables:\n"
-            "<code>LOG_CHANNEL_ID = -1001234567890</code>\n"
-            "or <code>LOG_CHANNEL_ID = @YourChannel</code>",
-            parse_mode="HTML",
-        )
-        return
-    try:
-        await context.bot.send_message(
-            config.LOG_CHANNEL_ID,
-            f"🔔 <b>Log Channel Test</b>\n\n"
-            f"✅ Connected successfully!\n"
-            f"Bot is delivering notifications to this channel.\n"
-            f"🕐 {datetime.now(timezone.utc).strftime('%d/%m %H:%M UTC')}",
-            parse_mode="HTML",
-        )
-        await update.message.reply_text(
-            f"✅ Test message sent to <code>{config.LOG_CHANNEL_ID}</code>.\n"
-            "Check your log channel — it should have just received a message.",
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ <b>Failed to send to log channel</b>\n\n"
-            f"Channel: <code>{config.LOG_CHANNEL_ID}</code>\n"
-            f"Error: <code>{e}</code>\n\n"
-            "Common fixes:\n"
-            "1. Make sure the bot is added as <b>Admin</b> in the channel\n"
-            "2. Check the channel ID format (use @username or -100XXXXXXXXXX)\n"
-            "3. Forward a message from the channel to @userinfobot to get the correct ID",
-            parse_mode="HTML",
-        )
-    """
-    Usage:  /rename KEY New display name
-    Examples:
-      /rename subl:dd-28th 🔸 28th Base
-      /rename cat:ff 🗓️ Fresh Files
-      /rename menu:store 🏪 Shop
-    Run /rename with no arguments to see all valid keys.
-    """
-    args = context.args or []
-
-    if not args:
-        lines = ["🏷️ <b>Renameable Labels</b>\n",
-                 "Usage: <code>/rename KEY New Name</code>\n"]
-        for key, default in config.RENAMEABLE.items():
-            current = db.get_label(key, default)
-            changed = " 🔄" if current != default else ""
-            lines.append(f"<code>{key}</code>{changed}\n  → {current}")
-        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-        return
-
-    key       = args[0].lower()
-    new_value = " ".join(args[1:]).strip()
-
-    if key not in config.RENAMEABLE:
-        valid = "\n".join(f"  <code>{k}</code>" for k in config.RENAMEABLE)
-        await update.message.reply_text(
-            f"❌ Unknown key: <code>{key}</code>\n\nValid keys:\n{valid}",
-            parse_mode="HTML",
-        )
-        return
-
-    if not new_value:
-        await update.message.reply_text(
-            f"Please provide the new name.\nExample: <code>/rename {key} 🔸 New Name</code>",
-            parse_mode="HTML",
-        )
-        return
-
-
-
-    old_value = db.get_label(key, config.default_label(key))
-    await db.set_label(key, new_value)
-    await update.message.reply_text(
-        f"✅ Renamed <code>{key}</code>\n"
-        f"  Before: <i>{old_value}</i>\n"
-        f"  After:  <b>{new_value}</b>\n\n"
-        "Live immediately — no restart needed.",
-        parse_mode="HTML",
-    )
-
-
-@admin_only
-async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Usage: /rename KEY New name  — run /rename alone to see all keys."""
-    args = context.args or []
-    if not args:
-        lines = ["🏷️ <b>Renameable Labels</b>\n",
-                 "Usage: <code>/rename KEY New Name</code>\n"]
-        for key, default in config.RENAMEABLE.items():
-            current = db.get_label(key, default)
-            changed = " 🔄" if current != default else ""
-            lines.append(f"<code>{key}</code>{changed}\n  → {current}")
-        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-        return
-    key       = args[0].lower()
-    new_value = " ".join(args[1:]).strip()
-    if key not in config.RENAMEABLE:
-        valid = "\n".join(f"  <code>{k}</code>" for k in config.RENAMEABLE)
-        await update.message.reply_text(
-            f"❌ Unknown key: <code>{key}</code>\n\nValid keys:\n{valid}",
-            parse_mode="HTML")
-        return
-    if not new_value:
-        await update.message.reply_text(
-            f"Please provide the new name.\nExample: <code>/rename {key} 🔸 New Name</code>",
-            parse_mode="HTML")
-        return
-
-    old_value = db.get_label(key, config.default_label(key))
-    await db.set_label(key, new_value)
-    await update.message.reply_text(
-        f"✅ Renamed <code>{key}</code>\n"
-        f"  Before: <i>{old_value}</i>\n"
-        f"  After:  <b>{new_value}</b>\n\n"
-        "Live immediately — no restart needed.",
-        parse_mode="HTML")
-
-
-async def cmd_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Usage: /upload SUBL_ID  — bot will then wait for a file."""
-    parts = context.args or []
-    if not parts:
-        await update.message.reply_text(
-            "Usage: /upload <b>LIST_ID</b>\n"
-            "Then send your .txt or .csv file as the next message.\n\n"
-            "Available list IDs:\n" +
-            "\n".join(
-                f"  <code>{s['id']}</code>  {s['label']}"
-                for cat in config.CATEGORIES
-                for s in cat.get("sublists", [])
-            ),
-            parse_mode="HTML",
-        )
-        return
-    subl_id = parts[0].lower()
-    # Validate it exists
-    valid = [s["id"] for cat in config.CATEGORIES for s in cat.get("sublists", [])]
-    if subl_id not in valid:
-        await update.message.reply_text(
-            f"❌ Unknown list ID: <code>{subl_id}</code>\n"
-            "Valid IDs: " + ", ".join(f"<code>{i}</code>" for i in valid),
-            parse_mode="HTML",
-        )
-        return
-    context.user_data["adm_awaiting"]    = "upload_file"
-    context.user_data["adm_upload_subl"] = subl_id
-    label = _subl_label(subl_id)
-    await update.message.reply_text(
-        f"📤 Ready to import into <b>{label}</b>.\n\n"
-        "Now send your <code>.txt</code> or <code>.csv</code> file.\n\n"
-        "<b>Required format</b> (one item per line):\n"
-        "<code>BIN|YEAR|CODE|PRICE|CONTENT</code>\n"
-        "e.g. <code>459667|2012|Ex3|5|4597xx 09/28 123 John Doe</code>\n\n"
-        "Comma and tab delimiters are also accepted.\n"
-        "Lines starting with <code>#</code> and blank lines are skipped.",
-        parse_mode="HTML",
-    )
-
-
-# ============================================================
-#  Document (file) handler
-# ============================================================
-@admin_only
-async def adm_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles .txt / .csv file uploads from admin for bulk stock import."""
-    doc = update.message.document
-    if not doc:
-        return
-
-    # Accept only text-like files.
-    fname = (doc.file_name or "").lower()
-    mime  = (doc.mime_type or "").lower()
-    is_text = (fname.endswith(".txt") or fname.endswith(".csv")
-               or "text" in mime or mime == "application/octet-stream")
-    if not is_text:
-        await update.message.reply_text(
-            "⚠️ Please send a <code>.txt</code> or <code>.csv</code> file.",
-            parse_mode="HTML",
-        )
-        return
-
-    # Size guard — reject files over 5 MB to avoid memory issues.
-    if doc.file_size and doc.file_size > 5 * 1024 * 1024:
-        await update.message.reply_text("⚠️ File too large (max 5 MB).")
-        return
-
-    caption = (update.message.caption or "").strip().lower()
-
-    # 1. Admin used /upload LIST_ID and is now sending the file.
-    if context.user_data.get("adm_awaiting") == "upload_file":
-        subl_id = context.user_data.pop("adm_upload_subl", "")
-        context.user_data["adm_awaiting"] = None
-        await _run_upload(update.message, subl_id, doc.file_id, context)
-        return
-
-    # 2. Caption matches a list ID directly — e.g. file sent with caption "dd-28th".
-    subl_id = _find_subl_by_name(caption)
-    if subl_id:
-        await _run_upload(update.message, subl_id, doc.file_id, context)
-        return
-
-    # 3. No hint — store file_id and show list picker.
-    context.user_data["adm_pending_file_id"] = doc.file_id
-    await update.message.reply_text(
-        "📂 File received.\n\n"
-        "Which list should this be imported into?\n"
-        "<i>Tip: next time add the list ID as the file caption to skip this step.</i>",
-        reply_markup=upload_list_picker_kb(),
-        parse_mode="HTML",
-    )
-
-
-async def _handle_broadcast_compose(update, context) -> None:
-    """Admin typed the broadcast message — show preview with Confirm/Cancel."""
-    context.user_data["adm_awaiting"] = None
-    msg = update.message.text.strip()
-    if not msg:
-        await update.message.reply_text("Message cannot be empty.")
-        return
-
-    # Store message in bot_data with a unique key (avoids callback_data length limit)
-    import uuid as _uuid
-    msg_key = _uuid.uuid4().hex[:12]
-    context.bot_data[msg_key] = msg
-
-    user_ids = await db.get_all_user_ids()
-    count    = len(user_ids)
-
-    await update.message.reply_text(
-        f"📢 <b>Broadcast Preview</b>\n"
-        f"<code>──────────────────────</code>\n"
-        f"{msg}\n"
-        f"<code>──────────────────────</code>\n"
-        f"Recipients: <b>{count}</b> users\n\n"
-        "Confirm to send to all users?",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Send to All",  callback_data=f"adm_bc_confirm:{msg_key}")],
-            [InlineKeyboardButton("❌ Cancel",        callback_data=f"adm_bc_cancel:{msg_key}")],
-        ]),
-        parse_mode="HTML",
-    )
-
-
 async def _do_broadcast(bot, msg: str, admin_id: int, chat_id: int) -> None:
-    """Send message to all users. Runs as background task. Reports result to admin."""
+    """Send message to all users. Runs as background task."""
     try:
         user_ids = await db.get_all_user_ids()
         ok, fail = 0, 0
@@ -2381,7 +2425,6 @@ async def _do_broadcast(bot, msg: str, admin_id: int, chat_id: int) -> None:
                 ok += 1
             except Exception:
                 fail += 1
-        # Send result to admin
         await bot.send_message(
             chat_id,
             f"📢 <b>Broadcast Complete</b>\n\n"
@@ -2413,6 +2456,7 @@ def register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("rename",    cmd_rename))
     app.add_handler(CommandHandler("price",     cmd_price))
     app.add_handler(CommandHandler("testlog",   cmd_testlog))
+    app.add_handler(CommandHandler("fulfill",   cmd_fulfill))
 
     # All adm_ callbacks — must run BEFORE the general on_button handler
     app.add_handler(CallbackQueryHandler(
@@ -2425,6 +2469,11 @@ def register_admin_handlers(app: Application) -> None:
         adm_document,
     ), group=1)
 
+    # Photo handler for file delivery (group 1)
+    app.add_handler(MessageHandler(
+        filters.PHOTO & filters.UpdateType.MESSAGE,
+        adm_photo,
+    ), group=1)
+
     # NOTE: admin TEXT input is NOT registered here.
     # bot.py's on_text() already routes to adm_text() when adm_awaiting is set.
-    # Registering it here caused ALL user text messages to be silently swallowed.
