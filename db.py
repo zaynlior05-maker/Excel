@@ -10,6 +10,7 @@ Tables:
   sublists -> dynamic sublist/base registry (add/remove via admin panel)
 """
 
+import time
 import uuid
 from decimal import Decimal
 
@@ -25,13 +26,26 @@ _label_cache: dict[str, str] = {}
 # In-memory sublist cache: cat_id -> list of {id, cat_id, label}
 _sublist_cache: dict[str, list[dict]] = {}
 
+# Short-lived stock cache: subl_id -> (monotonic_ts, list[dict])
+# Avoids a DB round-trip on every item tap / page turn.
+_stock_cache: dict[str, tuple[float, list]] = {}
+_STOCK_CACHE_TTL = 15  # seconds
+
+
+def _invalidate_stock(subl_id: str | None = None) -> None:
+    """Drop cached stock for a specific sublist, or all sublists if subl_id is None."""
+    if subl_id:
+        _stock_cache.pop(subl_id, None)
+    else:
+        _stock_cache.clear()
+
 
 # ============================================================
 #  Init
 # ============================================================
 async def init() -> None:
     global _pool
-    _pool = await asyncpg.create_pool(config.DATABASE_URL, min_size=1, max_size=5)
+    _pool = await asyncpg.create_pool(config.DATABASE_URL, min_size=2, max_size=10)
     async with _pool.acquire() as con:
         await con.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -482,6 +496,10 @@ async def get_payment(payment_id: str) -> dict | None:
 #  Stock
 # ============================================================
 async def get_stock(subl_id: str) -> list[dict]:
+    now = time.monotonic()
+    cached = _stock_cache.get(subl_id)
+    if cached and now - cached[0] < _STOCK_CACHE_TTL:
+        return cached[1]
     async with _pool.acquire() as con:
         rows = await con.fetch(
             "SELECT id,subl_id,bin,year,code,price,content "
@@ -489,7 +507,9 @@ async def get_stock(subl_id: str) -> list[dict]:
             "ORDER BY bin::bigint ASC, added_at ASC",
             subl_id,
         )
-        return [dict(r) for r in rows]
+    result = [dict(r) for r in rows]
+    _stock_cache[subl_id] = (now, result)
+    return result
 
 
 async def add_stock_item(subl_id: str, bin_: str, year: str,
@@ -501,6 +521,7 @@ async def add_stock_item(subl_id: str, bin_: str, year: str,
             "VALUES($1,$2,$3,$4,$5,$6,$7)",
             item_id, subl_id, bin_, year, code, price, content,
         )
+    _invalidate_stock(subl_id)
     return item_id
 
 
@@ -526,6 +547,7 @@ async def bulk_add_stock_items(rows: list[tuple]) -> dict:
                     inserted += 1
                 else:
                     duplicate += 1
+    _invalidate_stock()   # multiple sublists may be affected
     return {"inserted": inserted, "duplicate": duplicate}
 
 
@@ -534,7 +556,8 @@ async def remove_stock_item(item_id: str) -> bool:
         result = await con.execute(
             "DELETE FROM stock WHERE id=$1 AND sold=FALSE", item_id
         )
-        return result == "DELETE 1"
+    _invalidate_stock()   # don't know subl_id here; clear all
+    return result == "DELETE 1"
 
 
 async def get_sublist_price(subl_id: str) -> Decimal | None:
@@ -553,7 +576,8 @@ async def set_global_price(price: Decimal) -> int:
         result = await con.execute(
             "UPDATE stock SET price=$1 WHERE sold=FALSE", price
         )
-        return int(result.split()[-1])
+    _invalidate_stock()
+    return int(result.split()[-1])
 
 
 async def set_bin_price(bin_: str, price: Decimal) -> int:
@@ -562,7 +586,8 @@ async def set_bin_price(bin_: str, price: Decimal) -> int:
         result = await con.execute(
             "UPDATE stock SET price=$2 WHERE bin=$1 AND sold=FALSE", bin_, price
         )
-        return int(result.split()[-1])
+    _invalidate_stock()
+    return int(result.split()[-1])
 
 
 async def set_item_price(item_id: str, price: Decimal) -> bool:
@@ -571,7 +596,8 @@ async def set_item_price(item_id: str, price: Decimal) -> bool:
         result = await con.execute(
             "UPDATE stock SET price=$2 WHERE id=$1 AND sold=FALSE", item_id, price
         )
-        return int(result.split()[-1]) > 0
+    _invalidate_stock()
+    return int(result.split()[-1]) > 0
 
 
 async def set_sublist_price(subl_id: str, price: Decimal) -> int:
@@ -581,10 +607,16 @@ async def set_sublist_price(subl_id: str, price: Decimal) -> int:
             "UPDATE stock SET price=$2 WHERE subl_id=$1 AND sold=FALSE",
             subl_id, price,
         )
-        return int(result.split()[-1])
+    _invalidate_stock(subl_id)
+    return int(result.split()[-1])
 
 
 async def get_stock_item(item_id: str) -> dict | None:
+    # Check in-memory stock cache first (avoids a DB round-trip when listing is fresh)
+    for _ts, items in _stock_cache.values():
+        for it in items:
+            if it["id"] == item_id:
+                return it
     async with _pool.acquire() as con:
         row = await con.fetchrow(
             "SELECT id,subl_id,bin,year,code,price,content,sold FROM stock WHERE id=$1",
@@ -649,18 +681,22 @@ async def purchase_item(user_id: int, item_id: str, cart_id: str = "") -> dict:
             new_bal = await con.fetchval(
                 "SELECT balance FROM users WHERE user_id=$1", user_id
             )
-            return {
-                "status":      "success",
-                "order_id":    order_id,
-                "cart_id":     cart_id,
-                "content":     item["content"],
-                "price":       price,
-                "new_balance": new_bal,
-                "bin":         item["bin"],
-                "year":        item["year"],
-                "code":        item["code"],
-                "subl_id":     item["subl_id"],
-            }
+            subl_id_bought = item["subl_id"]
+
+        # Invalidate cache AFTER the transaction closes so next read is fresh
+        _invalidate_stock(subl_id_bought)
+        return {
+            "status":      "success",
+            "order_id":    order_id,
+            "cart_id":     cart_id,
+            "content":     item["content"],
+            "price":       price,
+            "new_balance": new_bal,
+            "bin":         item["bin"],
+            "year":        item["year"],
+            "code":        item["code"],
+            "subl_id":     subl_id_bought,
+        }
 
 
 # ============================================================
