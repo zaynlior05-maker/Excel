@@ -5,7 +5,7 @@ Tables:
   users    -> one row per Telegram user, holds balance + ban status
   payments -> one row per top-up, used to credit safely (no double credit)
   stock    -> every line item, managed live via admin panel
-  orders   -> record of every purchase
+  orders   -> record of every purchase (status: pending_delivery | completed | cancelled)
   labels   -> display-name overrides for any button/category/sublist
   sublists -> dynamic sublist/base registry (add/remove via admin panel)
 """
@@ -63,12 +63,14 @@ async def init() -> None:
                 added_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
             CREATE TABLE IF NOT EXISTS orders (
-                id         TEXT PRIMARY KEY,
-                user_id    BIGINT NOT NULL,
-                item_id    TEXT NOT NULL,
-                subl_id    TEXT NOT NULL,
-                amount     NUMERIC(10,2) NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                id               TEXT PRIMARY KEY,
+                user_id          BIGINT NOT NULL,
+                item_id          TEXT NOT NULL,
+                subl_id          TEXT NOT NULL,
+                amount           NUMERIC(10,2) NOT NULL,
+                status           TEXT NOT NULL DEFAULT 'pending_delivery',
+                delivery_file_id TEXT NOT NULL DEFAULT '',
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
             CREATE TABLE IF NOT EXISTS labels (
                 key        TEXT PRIMARY KEY,
@@ -92,6 +94,13 @@ async def init() -> None:
         )
         await con.execute(
             "ALTER TABLE sublists ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+        # Manual file delivery workflow migrations
+        await con.execute(
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'"
+        )
+        await con.execute(
+            "ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_file_id TEXT NOT NULL DEFAULT ''"
         )
     await _seed_sublists()
     await _refresh_sublist_cache()
@@ -479,15 +488,6 @@ async def get_stock(subl_id: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-async def get_stock_counts() -> dict[str, int]:
-    async with _pool.acquire() as con:
-        rows = await con.fetch(
-            "SELECT subl_id, COUNT(*) AS n FROM stock "
-            "WHERE sold=FALSE GROUP BY subl_id"
-        )
-        return {r["subl_id"]: r["n"] for r in rows}
-
-
 async def add_stock_item(subl_id: str, bin_: str, year: str,
                          code: str, price: Decimal, content: str) -> str:
     item_id = uuid.uuid4().hex[:8]
@@ -592,7 +592,8 @@ async def get_stock_item(item_id: str) -> dict | None:
 async def purchase_item(user_id: int, item_id: str) -> dict:
     """
     Attempt to buy an item. Returns a result dict:
-      {"status": "success",       "content": ..., "price": ..., "new_balance": ...}
+      {"status": "success", "order_id": ..., "content": ..., "price": ...,
+       "new_balance": ..., "bin": ..., "year": ..., "code": ..., "subl_id": ...}
       {"status": "not_available"}   item sold or missing
       {"status": "insufficient",  "balance": ..., "price": ..., "shortfall": ...}
     """
@@ -629,12 +630,12 @@ async def purchase_item(user_id: int, item_id: str) -> dict:
                 "UPDATE stock SET sold=TRUE WHERE id=$1", item_id
             )
 
-            # Record order
+            # Record order with pending_delivery status
             order_id = uuid.uuid4().hex[:12]
             await con.execute(
-                "INSERT INTO orders(id,user_id,item_id,subl_id,amount) "
-                "VALUES($1,$2,$3,$4,$5)",
-                order_id, user_id, item_id, item["subl_id"], price,
+                "INSERT INTO orders(id,user_id,item_id,subl_id,amount,status) "
+                "VALUES($1,$2,$3,$4,$5,$6)",
+                order_id, user_id, item_id, item["subl_id"], price, "pending_delivery",
             )
 
             new_bal = await con.fetchval(
@@ -642,19 +643,70 @@ async def purchase_item(user_id: int, item_id: str) -> dict:
             )
             return {
                 "status":      "success",
+                "order_id":    order_id,
                 "content":     item["content"],
                 "price":       price,
                 "new_balance": new_bal,
+                "bin":         item["bin"],
+                "year":        item["year"],
+                "code":        item["code"],
+                "subl_id":     item["subl_id"],
             }
 
 
 # ============================================================
 #  Orders
 # ============================================================
-async def get_recent_orders(limit: int = 20) -> list[dict]:
+async def get_order(order_id: str) -> dict | None:
+    """Fetch a single order by ID, joined with stock details."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "SELECT o.id, o.user_id, o.item_id, o.subl_id, o.amount, "
+            "o.status, o.delivery_file_id, o.created_at, "
+            "s.bin, s.year, s.code, s.content "
+            "FROM orders o LEFT JOIN stock s ON s.id = o.item_id "
+            "WHERE o.id = $1",
+            order_id,
+        )
+        return dict(row) if row else None
+
+
+async def set_order_status(order_id: str, status: str,
+                           delivery_file_id: str = "") -> bool:
+    """Update the status (and optionally delivery_file_id) of an order.
+    Returns True if a row was updated."""
+    async with _pool.acquire() as con:
+        if delivery_file_id:
+            result = await con.execute(
+                "UPDATE orders SET status=$2, delivery_file_id=$3 WHERE id=$1",
+                order_id, status, delivery_file_id,
+            )
+        else:
+            result = await con.execute(
+                "UPDATE orders SET status=$2 WHERE id=$1",
+                order_id, status,
+            )
+        return int(result.split()[-1]) > 0
+
+
+async def get_pending_delivery_orders(limit: int = 50) -> list[dict]:
+    """All orders awaiting admin file delivery."""
     async with _pool.acquire() as con:
         rows = await con.fetch(
             "SELECT o.id, o.user_id, o.subl_id, o.amount, o.created_at, "
+            "s.bin, s.year, s.code "
+            "FROM orders o LEFT JOIN stock s ON s.id = o.item_id "
+            "WHERE o.status = 'pending_delivery' "
+            "ORDER BY o.created_at ASC LIMIT $1",
+            limit,
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_recent_orders(limit: int = 20) -> list[dict]:
+    async with _pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT o.id, o.user_id, o.subl_id, o.amount, o.status, o.created_at, "
             "s.bin, s.year, s.code "
             "FROM orders o LEFT JOIN stock s ON s.id=o.item_id "
             "ORDER BY o.created_at DESC LIMIT $1",
@@ -666,7 +718,7 @@ async def get_recent_orders(limit: int = 20) -> list[dict]:
 async def get_user_orders(user_id: int, limit: int = 10) -> list[dict]:
     async with _pool.acquire() as con:
         rows = await con.fetch(
-            "SELECT o.id, o.subl_id, o.amount, o.created_at, "
+            "SELECT o.id, o.subl_id, o.amount, o.status, o.created_at, "
             "s.bin, s.year, s.code "
             "FROM orders o LEFT JOIN stock s ON s.id=o.item_id "
             "WHERE o.user_id=$1 ORDER BY o.created_at DESC LIMIT $2",
@@ -680,23 +732,27 @@ async def get_user_orders(user_id: int, limit: int = 10) -> list[dict]:
 # ============================================================
 async def get_stats() -> dict:
     async with _pool.acquire() as con:
-        total_users   = await con.fetchval("SELECT COUNT(*) FROM users")
-        banned_users  = await con.fetchval("SELECT COUNT(*) FROM users WHERE banned=TRUE")
-        total_stock   = await con.fetchval("SELECT COUNT(*) FROM stock WHERE sold=FALSE")
-        sold_stock    = await con.fetchval("SELECT COUNT(*) FROM stock WHERE sold=TRUE")
-        total_revenue = await con.fetchval(
+        total_users        = await con.fetchval("SELECT COUNT(*) FROM users")
+        banned_users       = await con.fetchval("SELECT COUNT(*) FROM users WHERE banned=TRUE")
+        total_stock        = await con.fetchval("SELECT COUNT(*) FROM stock WHERE sold=FALSE")
+        sold_stock         = await con.fetchval("SELECT COUNT(*) FROM stock WHERE sold=TRUE")
+        total_revenue      = await con.fetchval(
             "SELECT COALESCE(SUM(amount),0) FROM payments WHERE credited=TRUE"
         )
-        pending_pays  = await con.fetchval(
+        pending_pays       = await con.fetchval(
             "SELECT COUNT(*) FROM payments WHERE credited=FALSE"
         )
-        total_orders  = await con.fetchval("SELECT COUNT(*) FROM orders")
+        total_orders       = await con.fetchval("SELECT COUNT(*) FROM orders")
+        pending_deliveries = await con.fetchval(
+            "SELECT COUNT(*) FROM orders WHERE status='pending_delivery'"
+        )
         return {
-            "total_users":   total_users,
-            "banned_users":  banned_users,
-            "total_stock":   total_stock,
-            "sold_stock":    sold_stock,
-            "total_revenue": total_revenue,
-            "pending_pays":  pending_pays,
-            "total_orders":  total_orders,
+            "total_users":        total_users,
+            "banned_users":       banned_users,
+            "total_stock":        total_stock,
+            "sold_stock":         sold_stock,
+            "total_revenue":      total_revenue,
+            "pending_pays":       pending_pays,
+            "total_orders":       total_orders,
+            "pending_deliveries": pending_deliveries,
         }
