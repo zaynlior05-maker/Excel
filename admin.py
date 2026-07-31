@@ -35,6 +35,7 @@ Inline panel sections:
   📢 Broadcast  — type + confirm before sending
 """
 
+import html
 import logging
 import random
 import re
@@ -2004,9 +2005,14 @@ async def _handle_fulfill_file(update, context, file_id: str,
     s        = "s" if n > 1 else ""
 
     # ── Build receipt caption (covers all items) ─────────────────────
+    # Always html.escape() any user-supplied field so stray <, >, & never
+    # break Telegram's HTML parser.
+    sep = "──────────────────────"
     if n == 1:
-        o   = pending[0]
-        bin_ = o.get("bin", "?"); year = o.get("year", "?"); code = o.get("code", "?")
+        o    = pending[0]
+        bin_ = html.escape(str(o.get("bin",  "?")))
+        year = html.escape(str(o.get("year", "?")))
+        code = html.escape(str(o.get("code", "?")))
         receipt_caption = (
             "✅ <b>Your Order Has Been Delivered!</b>\n\n"
             f"💳 BIN:    <b>{bin_}</b>\n"
@@ -2017,23 +2023,33 @@ async def _handle_fulfill_file(update, context, file_id: str,
         )
     else:
         item_lines = "\n".join(
-            f"  {i+1}. {o.get('bin','?')} - {o.get('year','?')} - {o.get('code','?')}  "
+            f"  {i+1}. {html.escape(str(o.get('bin','?')))} - "
+            f"{html.escape(str(o.get('year','?')))} - "
+            f"{html.escape(str(o.get('code','?')))}  "
             f"{config.CURRENCY_SYMBOL}{float(o['amount']):g}"
             for i, o in enumerate(pending)
         )
         receipt_caption = (
             f"✅ <b>Your {n} Items Have Been Delivered!</b>\n\n"
-            f"<code>──────────────────────</code>\n"
+            f"{sep}\n"
             f"{item_lines}\n"
-            f"<code>──────────────────────</code>\n"
+            f"{sep}\n"
             f"💷 Total:   <b>{config.CURRENCY_SYMBOL}{total:g}</b>\n"
             f"💰 Balance: <b>{config.CURRENCY_SYMBOL}{new_bal:.2f}</b>\n\n"
             "If there are any issues, type /refund within 3 minutes."
         )
 
-    # Telegram caption limit is 1024 chars
+    # Telegram caption limit is 1024 chars.
+    # Truncate BEFORE adding any HTML so we never split inside a tag.
     if len(receipt_caption) > 1024:
-        receipt_caption = receipt_caption[:1020] + "…"
+        # Strip to plain text, trim, re-add a safe footer.
+        safe = (
+            f"✅ Your {n} item{'s' if n != 1 else ''} have been delivered.\n\n"
+            f"Total: {config.CURRENCY_SYMBOL}{total:g}  "
+            f"Balance: {config.CURRENCY_SYMBOL}{new_bal:.2f}\n\n"
+            "Type /refund within 3 minutes if there is an issue."
+        )
+        receipt_caption = safe
 
     # ── Send the file ONCE to the buyer ─────────────────────────────
     try:
@@ -2052,7 +2068,7 @@ async def _handle_fulfill_file(update, context, file_id: str,
         await update.message.reply_text(
             f"❌ <b>Delivery failed</b>\n\n"
             f"Could not send to buyer <code>{buyer_id}</code>.\n"
-            f"Error: <code>{e}</code>\n\n"
+            f"Error: <code>{html.escape(str(e))}</code>\n\n"
             "Order status has NOT changed. Please try again.",
             parse_mode="HTML",
         )
