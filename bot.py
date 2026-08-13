@@ -166,6 +166,24 @@ def format_line(item) -> str:
             f"{config.CURRENCY_SYMBOL}{price_str}")
 
 
+_ITEMS_PER_PAGE = 80   # items shown per page
+
+
+def lines_header(items: list, page: int, cart: dict | None = None) -> str:
+    """Status header shown above the item list — total stock, page position."""
+    per         = _ITEMS_PER_PAGE
+    total       = len(items)
+    total_pages = max(1, (total + per - 1) // per)
+    page        = max(0, min(page, total_pages - 1))
+    on_page     = len(items[page * per : page * per + per])
+    cart_note   = f"\n🛒 <b>{len(cart)}</b> in cart" if cart else ""
+    return (
+        f"🚨 <b>{on_page} / {total} Products Total</b>\n"
+        f"🗂️ <b>Page {page + 1} / {total_pages}</b>{cart_note}\n"
+        f"<code>──────────────────────</code>"
+    )
+
+
 def lines_menu(cat_id, subl_id, items, page=0, cart=None) -> InlineKeyboardMarkup:
     """
     Cart-aware item listing.
@@ -177,7 +195,7 @@ def lines_menu(cat_id, subl_id, items, page=0, cart=None) -> InlineKeyboardMarku
     if cart is None:
         cart = {}
 
-    per         = config.ITEMS_PER_PAGE
+    per         = _ITEMS_PER_PAGE
     total_pages = max(1, (len(items) + per - 1) // per)
     page        = max(0, min(page, total_pages - 1))
     page_items  = items[page * per : page * per + per]
@@ -518,7 +536,8 @@ async def handle_bin_search(update, context) -> None:
         await update.message.reply_text("Please send at least 6 digits, e.g. 414720")
         return
     bin_digits = bin_digits[:6]
-    context.user_data["awaiting"] = None
+    # Keep awaiting = "bin_search" so the user can type another BIN immediately
+    # without tapping "Search Another BIN" between each search.
 
     cat = find_category(cat_id)
     matches = []
@@ -681,11 +700,11 @@ async def _route_button(query, data: str, uid: int,
         context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": 0}
         if not items:
             await safe_edit(query,
-                f"<code>──────────────────────</code>\nNo lines in stock right now.",
+                "<code>──────────────────────</code>\nNo lines in stock right now.",
                 sublist_back_menu(cat_id))
             return
         await safe_edit(query,
-            f"<code>──────────────────────</code>\n{_txt('store_items_text', 'Tap items to add to cart:')}",
+            lines_header(items, 0, cart),
             lines_menu(cat_id, subl_id, items, page=0, cart=cart))
 
     elif data.startswith("page:"):
@@ -700,7 +719,7 @@ async def _route_button(query, data: str, uid: int,
         cart  = context.user_data.get("cart", {})
         context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": page}
         await safe_edit(query,
-            f"<code>──────────────────────</code>\n{_txt('store_items_text', 'Tap items to add to cart:')}",
+            lines_header(items, page, cart),
             lines_menu(cat_id, subl_id, items, page=page, cart=cart))
 
     elif data.startswith("refresh:"):
@@ -709,18 +728,14 @@ async def _route_button(query, data: str, uid: int,
         cart  = context.user_data.get("cart", {})   # cart is KEPT
         cat   = find_category(cat_id)
         subl  = find_sublist(cat, subl_id)
-        subl_label = db.get_label(f"subl:{subl_id}", subl["label"] if subl else subl_id)
         items = await db.get_stock(subl_id)
-        banner = "✅ <b>LIST UPDATED</b> ✅\n\n"   # always shown
-        count  = len(cart)
-        note   = f" · 🛒 <b>{count}</b> in cart" if count else ""
         if not items:
             await safe_edit(query,
-                f"{banner}<code>──────────────────────</code>\nNo lines in stock right now.",
+                "✅ <b>LIST UPDATED</b> ✅\n\n<code>──────────────────────</code>\nNo lines in stock right now.",
                 sublist_back_menu(cat_id))
             return
         await safe_edit(query,
-            f"{banner}<code>──────────────────────</code>\n{_txt('store_select_text', 'Tap to select/deselect')}{note}:",
+            "✅ <b>LIST UPDATED</b> ✅\n\n" + lines_header(items, 0, cart),
             lines_menu(cat_id, subl_id, items, page=0, cart=cart))
 
     elif data.startswith("sel:"):
@@ -739,18 +754,15 @@ async def _route_button(query, data: str, uid: int,
             if not item or item.get("sold"):
                 await query.answer("⚠️ This item is no longer available.", show_alert=True)
                 items = await db.get_stock(subl_id)
-                subl  = find_sublist(find_category(cat_id), subl_id)
                 await safe_edit(query,
-                    f"<code>──────────────────────</code>\n{_txt('store_items_text', 'Tap items to add to cart:')}",
+                    lines_header(items, page, cart),
                     lines_menu(cat_id, subl_id, items, page=page, cart=cart))
                 return
             cart[item_id] = subl_id
         context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": page}
         items = await db.get_stock(subl_id)
-        count = len(cart)
-        note  = f" · 🛒 <b>{count}</b> in cart" if count else ""
         await safe_edit(query,
-            f"<code>──────────────────────</code>\n{_txt('store_select_text', 'Tap to select/deselect')}{note}:",
+            lines_header(items, page, cart),
             lines_menu(cat_id, subl_id, items, page=page, cart=cart))
 
     elif data.startswith("cart_checkout:"):
