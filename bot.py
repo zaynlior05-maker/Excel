@@ -759,8 +759,13 @@ async def _route_button(query, data: str, uid: int,
                     lines_menu(cat_id, subl_id, items, page=page, cart=cart))
                 return
             cart[item_id] = subl_id
-        context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": page}
         items = await db.get_stock(subl_id)
+        # Always show the page the item actually lives on — this fixes BIN search
+        # results which hardcode page=0 but the item may be on a later page.
+        item_index = next((i for i, it in enumerate(items) if it["id"] == item_id), None)
+        if item_index is not None:
+            page = item_index // _ITEMS_PER_PAGE
+        context.user_data["nav"] = {"cat_id": cat_id, "subl_id": subl_id, "page": page}
         await safe_edit(query,
             lines_header(items, page, cart),
             lines_menu(cat_id, subl_id, items, page=page, cart=cart))
