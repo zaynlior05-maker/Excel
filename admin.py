@@ -250,6 +250,7 @@ def admin_home_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🏷️ Labels",    callback_data="adm_labels"),
             InlineKeyboardButton("📢 Broadcast",  callback_data="adm_broadcast"),
         ],
+        [InlineKeyboardButton("💬 Welcome Message", callback_data="adm_label_edit:welcome_text")],
         [InlineKeyboardButton("📦 Deliveries",    callback_data="adm_deliveries")],
         [InlineKeyboardButton("❌ Close",          callback_data="adm_close")],
     ])
@@ -1430,12 +1431,27 @@ async def adm_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         context.user_data["adm_label_key"] = key
         long_text_keys = {"welcome_text", "refund_text", "rules_text", "store_cat_text",
                           "store_subl_text", "store_items_text", "store_select_text"}
-        if key in long_text_keys:
+        if key == "welcome_text":
+            hint = (
+                "💬 <b>Edit Welcome Message</b>\n\n"
+                "Send your new welcome text now.\n\n"
+                "<b>Supported formatting:</b>\n"
+                "• Bold: <code>&lt;b&gt;text&lt;/b&gt;</code>\n"
+                "• Italic: <code>&lt;i&gt;text&lt;/i&gt;</code>\n"
+                "• Link: <code>&lt;a href=\"https://t.me/username\"&gt;Join us&lt;/a&gt;</code>\n"
+                "• t.me plain URL: just paste <code>https://t.me/username</code>\n"
+                "• Emojis, multi-line ✅\n\n"
+                "<b>Example with link:</b>\n"
+                "<code>Welcome! Join our channel: &lt;a href=\"https://t.me/yourchannel\"&gt;Click here&lt;/a&gt;</code>\n\n"
+                f"<b>Current:</b>\n<i>{current[:300]}{'…' if len(current) > 300 else ''}</i>"
+            )
+        elif key in long_text_keys:
             hint = (
                 f"📝 <b>Edit Content: {key}</b>\n\n"
                 "Send your new text now.\n"
                 "✅ Multi-line, emojis, any length\n"
-                "✅ HTML bold: <code>&lt;b&gt;text&lt;/b&gt;</code>\n\n"
+                "✅ HTML bold: <code>&lt;b&gt;text&lt;/b&gt;</code>\n"
+                "✅ Links: <code>&lt;a href=\"https://t.me/x\"&gt;text&lt;/a&gt;</code>\n\n"
                 f"Current preview:\n<i>{current[:200]}{'...' if len(current) > 200 else ''}</i>"
             )
         elif key.startswith("menu:"):
